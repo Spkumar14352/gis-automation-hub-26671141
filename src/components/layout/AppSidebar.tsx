@@ -1,4 +1,4 @@
-import { Database, GitCompare, ArrowLeftRight, Map, Settings, ChevronLeft, History, LogOut, LayoutDashboard } from 'lucide-react';
+import { Database, GitCompare, ArrowLeftRight, Map, Settings, ChevronLeft, History, LogOut, LayoutDashboard, User } from 'lucide-react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { useState } from 'react';
@@ -36,6 +36,12 @@ const navItems = [
     description: 'View past executions',
     icon: History,
     path: '/history',
+  },
+  {
+    title: 'Profile',
+    description: 'Account settings',
+    icon: User,
+    path: '/profile',
   },
 ];
 
