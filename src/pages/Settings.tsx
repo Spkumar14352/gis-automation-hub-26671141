@@ -1,4 +1,4 @@
-import { Settings as SettingsIcon, Moon, Sun, Trash2, Server, Check, ExternalLink } from 'lucide-react';
+import { Settings as SettingsIcon, Moon, Sun, Trash2, Server, Check, ExternalLink, Wand2 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -8,8 +8,10 @@ import { PageHeader } from '@/components/common/PageHeader';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { useLocalStorage } from '@/hooks/useLocalStorage';
+import { SetupWizard } from '@/components/setup/SetupWizard';
 
 export default function Settings() {
+  const [showSetupWizard, setShowSetupWizard] = useState(false);
   const [darkMode, setDarkMode] = useState(() => {
     return document.documentElement.classList.contains('dark');
   });
@@ -83,6 +85,17 @@ export default function Settings() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <p className="text-sm font-medium">Quick Setup</p>
+                <p className="text-xs text-muted-foreground">Use the wizard for guided configuration</p>
+              </div>
+              <Button variant="outline" onClick={() => setShowSetupWizard(true)}>
+                <Wand2 className="w-4 h-4 mr-2" />
+                Setup Wizard
+              </Button>
+            </div>
+
             <div className="space-y-2">
               <Label htmlFor="backend-url">Backend URL</Label>
               <div className="flex gap-2">
@@ -93,7 +106,7 @@ export default function Settings() {
                     setPythonBackendUrl(e.target.value);
                     setConnectionStatus('idle');
                   }}
-                  placeholder="http://your-server:8000"
+                  placeholder="http://localhost:5000"
                   className="font-mono"
                 />
                 <Button 
@@ -105,7 +118,7 @@ export default function Settings() {
                     'Testing...'
                   ) : connectionStatus === 'success' ? (
                     <>
-                      <Check className="w-4 h-4 mr-1 text-success" />
+                      <Check className="w-4 h-4 mr-1 text-green-500" />
                       Connected
                     </>
                   ) : (
@@ -114,28 +127,37 @@ export default function Settings() {
                 </Button>
               </div>
               <p className="text-xs text-muted-foreground">
-                URL of your Python FastAPI server running the GIS backend
+                URL of your Node.js backend server running the GIS API
               </p>
             </div>
 
             <div className="p-4 rounded-lg bg-muted/50 space-y-3">
               <p className="text-sm font-medium">Setup Instructions:</p>
               <ol className="text-sm text-muted-foreground space-y-2 list-decimal list-inside">
-                <li>Download the Python backend template from this app</li>
-                <li>Install on a machine with ArcGIS Pro (for ArcPy access)</li>
-                <li>Run: <code className="bg-muted px-1 rounded">pip install fastapi uvicorn requests</code></li>
-                <li>Start: <code className="bg-muted px-1 rounded">uvicorn gis_backend:app --host 0.0.0.0 --port 8000</code></li>
-                <li>Enter the server URL above and test the connection</li>
+                <li>Navigate to <code className="bg-muted px-1 rounded">public/node-backend</code></li>
+                <li>Run: <code className="bg-muted px-1 rounded">npm install</code></li>
+                <li>Start: <code className="bg-muted px-1 rounded">npm start</code></li>
+                <li>Or use Docker: <code className="bg-muted px-1 rounded">docker-compose up -d</code></li>
               </ol>
-              <Button variant="outline" size="sm" asChild>
-                <a href="/python-backend/gis_backend.py" download="gis_backend.py">
-                  <ExternalLink className="w-4 h-4 mr-2" />
-                  Download Python Backend
-                </a>
-              </Button>
+              <div className="flex gap-2 flex-wrap">
+                <Button variant="outline" size="sm" asChild>
+                  <a href="/node-backend/server.js" download="server.js">
+                    <ExternalLink className="w-4 h-4 mr-2" />
+                    Download Backend
+                  </a>
+                </Button>
+                <Button variant="outline" size="sm" asChild>
+                  <a href="/node-backend/Dockerfile" download="Dockerfile">
+                    <ExternalLink className="w-4 h-4 mr-2" />
+                    Download Dockerfile
+                  </a>
+                </Button>
+              </div>
             </div>
           </CardContent>
         </Card>
+
+        <SetupWizard open={showSetupWizard} onOpenChange={setShowSetupWizard} />
 
         {/* Appearance */}
         <Card>

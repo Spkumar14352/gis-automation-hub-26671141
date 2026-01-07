@@ -4,36 +4,62 @@ A hybrid Node.js + Python backend for GIS automation. Node.js handles the API se
 
 ## Quick Start
 
-### 1. Install Node.js Dependencies
+### Option 1: Docker (Recommended)
 
 ```bash
-cd public/node-backend
-npm install
+# Build and start the container
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop the container
+docker-compose down
 ```
 
-### 2. Configure Python Path (Optional)
+### Option 2: Local Development
 
-If using ArcGIS Pro's Python environment, set the environment variable:
+```bash
+# Install dependencies
+npm install
+
+# Start the server
+npm start
+
+# Or with auto-reload
+npm run dev
+```
+
+## Configuration
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | 5000 | HTTP server port |
+| `ARCPY_PYTHON_PATH` | python | Path to Python with ArcPy |
+
+### ArcGIS Pro Python Path
+
+For ArcPy operations, set the `ARCPY_PYTHON_PATH` environment variable:
 
 **Windows (PowerShell):**
 ```powershell
 $env:ARCPY_PYTHON_PATH = "C:\Program Files\ArcGIS\Pro\bin\Python\envs\arcgispro-py3\python.exe"
+npm start
 ```
 
 **Windows (Command Prompt):**
 ```cmd
 set ARCPY_PYTHON_PATH=C:\Program Files\ArcGIS\Pro\bin\Python\envs\arcgispro-py3\python.exe
-```
-
-If not set, the server uses the default `python` command.
-
-### 3. Start the Server
-
-```bash
 npm start
 ```
 
-Server runs at `http://localhost:5000`
+**Linux/macOS:**
+```bash
+export ARCPY_PYTHON_PATH=/path/to/arcgis/python
+npm start
+```
 
 ## API Endpoints
 
@@ -58,35 +84,49 @@ Server runs at `http://localhost:5000`
 - **Node.js**: Handles HTTP requests, file browsing, job management
 - **Python Scripts**: Execute ArcPy operations (spawn on demand)
 
+## Docker Configuration
+
+The included `Dockerfile` and `docker-compose.yml` provide:
+- Node.js 20 runtime
+- Python 3 for script execution
+- Health checks
+- Volume mounts for data access
+
+### Customizing Docker
+
+Edit `docker-compose.yml` to mount your data directories:
+
+```yaml
+volumes:
+  - /path/to/your/data:/data:ro
+```
+
 ## Job Types
 
 1. **gdb_extraction** - Extract feature classes from File GDB to shapefiles
 2. **sde_conversion** - Migrate data between Enterprise Geodatabases
 3. **comparison** - Compare feature class schemas/attributes/spatial properties
 
-## Example Requests
+## Scripts
 
-### Browse Filesystem
-```bash
-curl -X POST http://localhost:5000/browse \
-  -H "Content-Type: application/json" \
-  -d '{"path": "C:\\Data", "type": "gdb"}'
-```
+Python scripts in the `scripts/` directory:
+- `list_feature_classes.py` - List GDB contents
+- `gdb_extraction.py` - Extract feature classes to shapefiles
+- `sde_conversion.py` - SDE to SDE migration
+- `comparison.py` - Feature class comparison
 
-### Execute Job
-```bash
-curl -X POST http://localhost:5000/execute \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jobType": "gdb_extraction",
-    "config": {
-      "sourcePath": "C:\\Data\\MyGDB.gdb",
-      "outputFolder": "C:\\Output",
-      "featureClasses": ["Parcels", "Roads"]
-    }
-  }'
-```
+Each script includes simulation mode when ArcPy is unavailable.
 
-## Simulation Mode
+## Troubleshooting
 
-If ArcPy is not available, scripts run in simulation mode with mock data. This allows testing the full workflow without ArcGIS installed.
+### Connection Refused
+- Ensure the server is running on the correct port
+- Check firewall settings
+
+### ArcPy Not Found
+- Set `ARCPY_PYTHON_PATH` to your ArcGIS Pro Python executable
+- Verify ArcGIS Pro is installed
+
+### Permission Denied
+- Run with appropriate file system permissions
+- Check Docker volume mount permissions

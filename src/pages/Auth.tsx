@@ -6,9 +6,11 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Map, Loader2, AlertCircle } from 'lucide-react';
+import { Map, Loader2, AlertCircle, Settings } from 'lucide-react';
 import { toast } from 'sonner';
 import { z } from 'zod';
+import { SetupWizard } from '@/components/setup/SetupWizard';
+import { useLocalStorage } from '@/hooks/useLocalStorage';
 
 const emailSchema = z.string().email('Please enter a valid email address');
 const passwordSchema = z.string().min(6, 'Password must be at least 6 characters');
@@ -18,6 +20,8 @@ export default function Auth() {
   const { signIn, signUp, user } = useAuth();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showSetupWizard, setShowSetupWizard] = useState(false);
+  const [backendUrl] = useLocalStorage('python-backend-url', '');
 
   // Redirect if already logged in
   if (user) {
@@ -122,6 +126,17 @@ export default function Auth() {
                 <TabsTrigger value="signup">Sign Up</TabsTrigger>
               </TabsList>
 
+              {/* Backend status notice - now a clickable setup option */}
+              {!backendUrl && (
+                <button
+                  onClick={() => setShowSetupWizard(true)}
+                  className="flex items-center gap-2 p-3 mb-4 rounded-lg bg-muted/50 text-muted-foreground text-sm w-full hover:bg-muted transition-colors text-left"
+                >
+                  <Settings className="w-4 h-4 flex-shrink-0" />
+                  <span>Backend not configured. <span className="text-primary underline">Run setup wizard</span></span>
+                </button>
+              )}
+
               {error && (
                 <div className="flex items-center gap-2 p-3 mb-4 rounded-lg bg-destructive/10 text-destructive text-sm">
                   <AlertCircle className="w-4 h-4 flex-shrink-0" />
@@ -216,6 +231,8 @@ export default function Auth() {
           </CardContent>
         </Card>
       </div>
+
+      <SetupWizard open={showSetupWizard} onOpenChange={setShowSetupWizard} />
     </div>
   );
 }
