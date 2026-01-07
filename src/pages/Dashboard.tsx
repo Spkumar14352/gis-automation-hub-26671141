@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { 
   Database, ArrowLeftRight, GitCompare, Clock, 
   CheckCircle, XCircle, Loader2, Play, Settings,
-  Server, AlertCircle
+  Server, AlertCircle, Wand2
 } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -13,6 +13,7 @@ import { useLocalStorage } from '@/hooks/useLocalStorage';
 import { supabase } from '@/integrations/supabase/client';
 import { formatDistanceToNow } from 'date-fns';
 import { cn } from '@/lib/utils';
+import { SetupWizard } from '@/components/setup/SetupWizard';
 
 const quickActions = [
   {
@@ -71,13 +72,18 @@ export default function Dashboard() {
   const [pythonBackendUrl] = useLocalStorage('python-backend-url', '');
   const [backendStatus, setBackendStatus] = useState<'unknown' | 'online' | 'offline'>('unknown');
   const [checkingBackend, setCheckingBackend] = useState(false);
+  const [showSetupWizard, setShowSetupWizard] = useState(false);
+  const [hasSeenWizard, setHasSeenWizard] = useLocalStorage('has-seen-setup-wizard', false);
 
   useEffect(() => {
     loadRecentJobs();
     if (pythonBackendUrl) {
       checkBackendStatus();
+    } else if (!hasSeenWizard) {
+      // Show setup wizard on first visit if backend is not configured
+      setShowSetupWizard(true);
     }
-  }, [pythonBackendUrl]);
+  }, [pythonBackendUrl, hasSeenWizard]);
 
   const loadRecentJobs = async () => {
     setLoading(true);
@@ -283,16 +289,28 @@ export default function Dashboard() {
                 To execute GIS operations, you need to set up the Python/ArcPy backend on your server.
                 Download the backend script and configure the URL in Settings.
               </p>
-              <Button variant="outline" size="sm" className="mt-3" asChild>
-                <Link to="/settings">
-                  <Settings className="w-4 h-4 mr-2" />
-                  Go to Settings
-                </Link>
-              </Button>
+              <div className="flex gap-2 mt-3">
+                <Button variant="default" size="sm" onClick={() => setShowSetupWizard(true)}>
+                  <Wand2 className="w-4 h-4 mr-2" />
+                  Setup Wizard
+                </Button>
+                <Button variant="outline" size="sm" asChild>
+                  <Link to="/settings">
+                    <Settings className="w-4 h-4 mr-2" />
+                    Go to Settings
+                  </Link>
+                </Button>
+              </div>
             </div>
           </CardContent>
         </Card>
       )}
+
+      <SetupWizard 
+        open={showSetupWizard} 
+        onOpenChange={setShowSetupWizard} 
+        onComplete={() => setHasSeenWizard(true)}
+      />
     </div>
   );
 }
