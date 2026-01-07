@@ -118,6 +118,16 @@ export default function Auth() {
             <CardDescription>
               Sign in to access your GIS automation workspace
             </CardDescription>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowSetupWizard(true)}
+              className="mx-auto mt-2"
+            >
+              <Settings className="w-4 h-4 mr-2" />
+              Setup Wizard
+            </Button>
           </CardHeader>
           <CardContent>
             <Tabs defaultValue="signin" className="w-full">
