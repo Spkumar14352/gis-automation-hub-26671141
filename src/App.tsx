@@ -13,6 +13,7 @@ import SDEConversion from "./pages/SDEConversion";
 import Comparison from "./pages/Comparison";
 import JobHistory from "./pages/JobHistory";
 import Settings from "./pages/Settings";
+import Dashboard from "./pages/Dashboard";
 import NotFound from "./pages/NotFound";
 import { useEffect } from "react";
 
@@ -46,6 +47,7 @@ const App = () => (
                 </ProtectedRoute>
               }
             >
+              <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/gdb-extraction" element={<GDBExtraction />} />
               <Route path="/sde-conversion" element={<SDEConversion />} />
               <Route path="/comparison" element={<Comparison />} />
