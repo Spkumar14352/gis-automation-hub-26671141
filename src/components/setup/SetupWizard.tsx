@@ -3,9 +3,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Check, ChevronRight, ChevronLeft, Server, Loader2, AlertCircle, CheckCircle2, Search, FolderSearch, Copy } from 'lucide-react';
+import { Check, ChevronRight, ChevronLeft, Server, Loader2, AlertCircle, CheckCircle2, Search, FolderSearch, Copy, Database } from 'lucide-react';
 import { toast } from 'sonner';
 import { useLocalStorage } from '@/hooks/useLocalStorage';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Checkbox } from '@/components/ui/checkbox';
 
 interface SetupWizardProps {
   open: boolean;
@@ -18,6 +20,16 @@ interface DetectedPython {
   version?: string;
   hasArcpy: boolean;
   isDefault?: boolean;
+}
+
+interface DbConfig {
+  type: 'sqlite' | 'sqlserver';
+  server: string;
+  database: string;
+  user: string;
+  password: string;
+  encrypt: boolean;
+  trustCert: boolean;
 }
 
 export function SetupWizard({ open, onOpenChange, onComplete }: SetupWizardProps) {
@@ -33,8 +45,21 @@ export function SetupWizard({ open, onOpenChange, onComplete }: SetupWizardProps
     pythonPath?: string;
     error?: string;
   } | null>(null);
+  
+  // Database configuration state
+  const [dbConfig, setDbConfig] = useState<DbConfig>({
+    type: 'sqlite',
+    server: '',
+    database: 'GIS_Hub',
+    user: '',
+    password: '',
+    encrypt: false,
+    trustCert: true
+  });
+  const [testingDb, setTestingDb] = useState(false);
+  const [dbResult, setDbResult] = useState<{ success: boolean; message?: string; error?: string } | null>(null);
 
-  const totalSteps = 4;
+  const totalSteps = 5;
 
   const testConnection = async () => {
     setTesting(true);
@@ -126,6 +151,31 @@ export function SetupWizard({ open, onOpenChange, onComplete }: SetupWizardProps
     toast.success('Copied to clipboard!');
   };
 
+  const testDbConnection = async () => {
+    setTestingDb(true);
+    setDbResult(null);
+
+    try {
+      const response = await fetch(`${backendUrl}/configure-database`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(dbConfig),
+      });
+
+      const data = await response.json();
+      if (data.success) {
+        setDbResult({ success: true, message: data.message });
+        toast.success('Database connection successful!');
+      } else {
+        setDbResult({ success: false, error: data.error });
+      }
+    } catch (error) {
+      setDbResult({ success: false, error: 'Could not connect to backend to test database.' });
+    } finally {
+      setTestingDb(false);
+    }
+  };
+
   const handleComplete = () => {
     toast.success('Setup completed! You can now use GIS tools.');
     onComplete?.();
@@ -134,6 +184,7 @@ export function SetupWizard({ open, onOpenChange, onComplete }: SetupWizardProps
     setConnectionResult(null);
     setDetectedPythons([]);
     setSelectedPython(null);
+    setDbResult(null);
   };
 
   const handleSkip = () => {
@@ -143,6 +194,7 @@ export function SetupWizard({ open, onOpenChange, onComplete }: SetupWizardProps
     setConnectionResult(null);
     setDetectedPythons([]);
     setSelectedPython(null);
+    setDbResult(null);
   };
 
   return (
@@ -160,10 +212,10 @@ export function SetupWizard({ open, onOpenChange, onComplete }: SetupWizardProps
 
         {/* Progress indicator */}
         <div className="flex items-center gap-2 py-4">
-          {[1, 2, 3, 4].map((s) => (
+          {[1, 2, 3, 4, 5].map((s) => (
             <div key={s} className="flex items-center">
               <div
-                className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-colors ${
+                className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-medium transition-colors ${
                   s < step
                     ? 'bg-primary text-primary-foreground'
                     : s === step
@@ -171,11 +223,11 @@ export function SetupWizard({ open, onOpenChange, onComplete }: SetupWizardProps
                     : 'bg-muted text-muted-foreground'
                 }`}
               >
-                {s < step ? <Check className="w-4 h-4" /> : s}
+                {s < step ? <Check className="w-3 h-3" /> : s}
               </div>
               {s < totalSteps && (
                 <div
-                  className={`w-8 h-0.5 mx-1 ${
+                  className={`w-6 h-0.5 mx-0.5 ${
                     s < step ? 'bg-primary' : 'bg-muted'
                   }`}
                 />
@@ -349,6 +401,148 @@ export function SetupWizard({ open, onOpenChange, onComplete }: SetupWizardProps
           )}
 
           {step === 4 && (
+            <div className="space-y-4">
+              <h3 className="font-medium flex items-center gap-2">
+                <Database className="w-5 h-5" />
+                Database Configuration
+              </h3>
+              <p className="text-sm text-muted-foreground">
+                Configure where to store user accounts, configurations, and job history.
+              </p>
+
+              <div className="space-y-3">
+                <div className="space-y-2">
+                  <Label>Database Type</Label>
+                  <Select
+                    value={dbConfig.type}
+                    onValueChange={(value: 'sqlite' | 'sqlserver') => {
+                      setDbConfig({ ...dbConfig, type: value });
+                      setDbResult(null);
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="sqlite">SQLite (Local File)</SelectItem>
+                      <SelectItem value="sqlserver">SQL Server</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {dbConfig.type === 'sqlserver' && (
+                  <>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-2">
+                        <Label htmlFor="db-server">Server</Label>
+                        <Input
+                          id="db-server"
+                          placeholder="localhost or IP address"
+                          value={dbConfig.server}
+                          onChange={(e) => setDbConfig({ ...dbConfig, server: e.target.value })}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="db-name">Database Name</Label>
+                        <Input
+                          id="db-name"
+                          placeholder="GIS_Hub"
+                          value={dbConfig.database}
+                          onChange={(e) => setDbConfig({ ...dbConfig, database: e.target.value })}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-2">
+                        <Label htmlFor="db-user">Username</Label>
+                        <Input
+                          id="db-user"
+                          placeholder="sa"
+                          value={dbConfig.user}
+                          onChange={(e) => setDbConfig({ ...dbConfig, user: e.target.value })}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="db-password">Password</Label>
+                        <Input
+                          id="db-password"
+                          type="password"
+                          placeholder="••••••••"
+                          value={dbConfig.password}
+                          onChange={(e) => setDbConfig({ ...dbConfig, password: e.target.value })}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-4 pt-2">
+                      <div className="flex items-center space-x-2">
+                        <Checkbox
+                          id="encrypt"
+                          checked={dbConfig.encrypt}
+                          onCheckedChange={(checked) => setDbConfig({ ...dbConfig, encrypt: !!checked })}
+                        />
+                        <Label htmlFor="encrypt" className="text-sm">Encrypt Connection</Label>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <Checkbox
+                          id="trustCert"
+                          checked={dbConfig.trustCert}
+                          onCheckedChange={(checked) => setDbConfig({ ...dbConfig, trustCert: !!checked })}
+                        />
+                        <Label htmlFor="trustCert" className="text-sm">Trust Server Certificate</Label>
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                <Button 
+                  onClick={testDbConnection} 
+                  disabled={testingDb}
+                  className="w-full mt-2"
+                  variant={dbConfig.type === 'sqlite' ? 'secondary' : 'default'}
+                >
+                  {testingDb ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Testing Connection...
+                    </>
+                  ) : (
+                    dbConfig.type === 'sqlite' ? 'Use SQLite (Default)' : 'Test SQL Server Connection'
+                  )}
+                </Button>
+
+                {dbResult && (
+                  <div
+                    className={`p-3 rounded-lg ${
+                      dbResult.success
+                        ? 'bg-green-500/10 text-green-700 dark:text-green-400'
+                        : 'bg-destructive/10 text-destructive'
+                    }`}
+                  >
+                    <div className="flex items-start gap-2">
+                      {dbResult.success ? (
+                        <CheckCircle2 className="w-5 h-5 flex-shrink-0" />
+                      ) : (
+                        <AlertCircle className="w-5 h-5 flex-shrink-0" />
+                      )}
+                      <p className="text-sm">
+                        {dbResult.success ? dbResult.message : dbResult.error}
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {dbConfig.type === 'sqlite' && (
+                <div className="p-3 rounded-lg bg-muted/50 text-xs text-muted-foreground">
+                  SQLite stores data in a local file (<code>gis_hub.db</code>). Good for single-user or development setups.
+                </div>
+              )}
+            </div>
+          )}
+
+          {step === 5 && (
             <div className="space-y-4">
               <h3 className="font-medium">Test Connection</h3>
               <p className="text-sm text-muted-foreground">
