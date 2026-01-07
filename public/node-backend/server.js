@@ -12,49 +12,172 @@ const PORT = process.env.PORT || 5000;
 // Store active jobs in memory
 const jobs = new Map();
 
-// ============= SQLite Database Setup =============
-const sqlite3 = require('better-sqlite3');
-const dbPath = process.env.DATABASE_PATH || path.join(__dirname, 'gis_hub.db');
-const db = sqlite3(dbPath);
+// ============= Database Setup =============
+// Supports both SQLite (default) and SQL Server
+const DB_TYPE = process.env.DB_TYPE || 'sqlite'; // 'sqlite' or 'sqlserver'
 
-// Create tables
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id TEXT PRIMARY KEY,
-    email TEXT UNIQUE NOT NULL,
-    password_hash TEXT NOT NULL,
-    full_name TEXT,
-    created_at TEXT DEFAULT (datetime('now'))
-  );
-  
-  CREATE TABLE IF NOT EXISTS configurations (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    name TEXT NOT NULL,
-    job_type TEXT NOT NULL,
-    config TEXT NOT NULL,
-    is_default INTEGER DEFAULT 0,
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now')),
-    FOREIGN KEY (user_id) REFERENCES users(id)
-  );
-  
-  CREATE TABLE IF NOT EXISTS job_history (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    job_type TEXT NOT NULL,
-    config TEXT NOT NULL,
-    status TEXT DEFAULT 'pending',
-    logs TEXT DEFAULT '[]',
-    result TEXT,
-    started_at TEXT,
-    completed_at TEXT,
-    created_at TEXT DEFAULT (datetime('now')),
-    FOREIGN KEY (user_id) REFERENCES users(id)
-  );
-`);
+let db = null;
+let dbReady = false;
 
-console.log(`📦 Database initialized at: ${dbPath}`);
+// SQL Server configuration
+const sqlServerConfig = {
+  server: process.env.DB_SERVER || 'localhost',
+  database: process.env.DB_NAME || 'GIS_Hub',
+  user: process.env.DB_USER || '',
+  password: process.env.DB_PASSWORD || '',
+  options: {
+    encrypt: process.env.DB_ENCRYPT === 'true',
+    trustServerCertificate: process.env.DB_TRUST_CERT !== 'false',
+    enableArithAbort: true
+  },
+  pool: {
+    max: 10,
+    min: 0,
+    idleTimeoutMillis: 30000
+  }
+};
+
+// Initialize database based on type
+async function initDatabase() {
+  if (DB_TYPE === 'sqlserver') {
+    try {
+      const sql = require('mssql');
+      db = await sql.connect(sqlServerConfig);
+      
+      // Create tables if they don't exist
+      await db.request().query(`
+        IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='users' AND xtype='U')
+        CREATE TABLE users (
+          id NVARCHAR(36) PRIMARY KEY,
+          email NVARCHAR(255) UNIQUE NOT NULL,
+          password_hash NVARCHAR(255) NOT NULL,
+          full_name NVARCHAR(255),
+          created_at DATETIME DEFAULT GETDATE()
+        );
+        
+        IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='configurations' AND xtype='U')
+        CREATE TABLE configurations (
+          id NVARCHAR(36) PRIMARY KEY,
+          user_id NVARCHAR(36) NOT NULL,
+          name NVARCHAR(255) NOT NULL,
+          job_type NVARCHAR(50) NOT NULL,
+          config NVARCHAR(MAX) NOT NULL,
+          is_default BIT DEFAULT 0,
+          created_at DATETIME DEFAULT GETDATE(),
+          updated_at DATETIME DEFAULT GETDATE(),
+          FOREIGN KEY (user_id) REFERENCES users(id)
+        );
+        
+        IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='job_history' AND xtype='U')
+        CREATE TABLE job_history (
+          id NVARCHAR(36) PRIMARY KEY,
+          user_id NVARCHAR(36) NOT NULL,
+          job_type NVARCHAR(50) NOT NULL,
+          config NVARCHAR(MAX) NOT NULL,
+          status NVARCHAR(20) DEFAULT 'pending',
+          logs NVARCHAR(MAX) DEFAULT '[]',
+          result NVARCHAR(MAX),
+          started_at DATETIME,
+          completed_at DATETIME,
+          created_at DATETIME DEFAULT GETDATE(),
+          FOREIGN KEY (user_id) REFERENCES users(id)
+        );
+      `);
+      
+      console.log(`📦 Connected to SQL Server: ${sqlServerConfig.server}/${sqlServerConfig.database}`);
+      dbReady = true;
+    } catch (error) {
+      console.error('❌ SQL Server connection failed:', error.message);
+      console.log('💡 Falling back to SQLite...');
+      initSQLite();
+    }
+  } else {
+    initSQLite();
+  }
+}
+
+function initSQLite() {
+  const sqlite3 = require('better-sqlite3');
+  const dbPath = process.env.DATABASE_PATH || path.join(__dirname, 'gis_hub.db');
+  db = sqlite3(dbPath);
+  
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      email TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      full_name TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    
+    CREATE TABLE IF NOT EXISTS configurations (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      job_type TEXT NOT NULL,
+      config TEXT NOT NULL,
+      is_default INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+    
+    CREATE TABLE IF NOT EXISTS job_history (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      job_type TEXT NOT NULL,
+      config TEXT NOT NULL,
+      status TEXT DEFAULT 'pending',
+      logs TEXT DEFAULT '[]',
+      result TEXT,
+      started_at TEXT,
+      completed_at TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+  `);
+  
+  console.log(`📦 SQLite database initialized at: ${dbPath}`);
+  dbReady = true;
+}
+
+// Database helper functions for both SQLite and SQL Server
+async function dbQuery(query, params = []) {
+  if (DB_TYPE === 'sqlserver' && db && db.request) {
+    const request = db.request();
+    params.forEach((param, index) => {
+      request.input(`p${index}`, param);
+    });
+    // Replace ? placeholders with @p0, @p1, etc.
+    let sqlQuery = query;
+    let paramIndex = 0;
+    sqlQuery = sqlQuery.replace(/\?/g, () => `@p${paramIndex++}`);
+    const result = await request.query(sqlQuery);
+    return result.recordset;
+  } else {
+    return db.prepare(query).all(...params);
+  }
+}
+
+async function dbGet(query, params = []) {
+  const results = await dbQuery(query, params);
+  return results[0] || null;
+}
+
+async function dbRun(query, params = []) {
+  if (DB_TYPE === 'sqlserver' && db && db.request) {
+    const request = db.request();
+    params.forEach((param, index) => {
+      request.input(`p${index}`, param);
+    });
+    let sqlQuery = query;
+    let paramIndex = 0;
+    sqlQuery = sqlQuery.replace(/\?/g, () => `@p${paramIndex++}`);
+    await request.query(sqlQuery);
+  } else {
+    db.prepare(query).run(...params);
+  }
+}
 
 // ============= Auth Helpers =============
 const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
@@ -103,7 +226,7 @@ function verifyToken(token) {
 }
 
 // Auth middleware
-function authMiddleware(req, res, next) {
+async function authMiddleware(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ detail: 'Not authenticated' });
@@ -115,7 +238,7 @@ function authMiddleware(req, res, next) {
     return res.status(401).json({ detail: 'Invalid or expired token' });
   }
   
-  const user = db.prepare('SELECT id, email, full_name, created_at FROM users WHERE id = ?').get(decoded.sub);
+  const user = await dbGet('SELECT id, email, full_name, created_at FROM users WHERE id = ?', [decoded.sub]);
   if (!user) {
     return res.status(401).json({ detail: 'User not found' });
   }
@@ -138,8 +261,55 @@ app.get('/health', (req, res) => {
     status: 'healthy',
     timestamp: new Date().toISOString(),
     pythonPath: pythonPath,
-    platform: process.platform
+    platform: process.platform,
+    database: {
+      type: DB_TYPE,
+      connected: dbReady,
+      server: DB_TYPE === 'sqlserver' ? sqlServerConfig.server : 'local'
+    }
   });
+});
+
+// Database configuration endpoint
+app.post('/configure-database', async (req, res) => {
+  const { type, server, database, user, password, encrypt, trustCert } = req.body;
+  
+  if (type === 'sqlserver') {
+    try {
+      const sql = require('mssql');
+      const testConfig = {
+        server: server || 'localhost',
+        database: database || 'GIS_Hub',
+        user: user || '',
+        password: password || '',
+        options: {
+          encrypt: encrypt || false,
+          trustServerCertificate: trustCert !== false,
+          enableArithAbort: true
+        }
+      };
+      
+      const testPool = await sql.connect(testConfig);
+      await testPool.close();
+      
+      res.json({ 
+        success: true, 
+        message: 'SQL Server connection successful',
+        config: { server, database, user: user ? '***' : '' }
+      });
+    } catch (error) {
+      res.status(400).json({ 
+        success: false, 
+        error: error.message 
+      });
+    }
+  } else {
+    res.json({ 
+      success: true, 
+      message: 'SQLite is the default database',
+      config: { type: 'sqlite' }
+    });
+  }
 });
 
 // Common ArcGIS Pro Python installation paths
@@ -458,7 +628,7 @@ async function sendCallback(callbackUrl, jobId, status, logs, result) {
 }
 
 // ============= Auth Endpoints =============
-app.post('/auth/signup', (req, res) => {
+app.post('/auth/signup', async (req, res) => {
   const { email, password, full_name } = req.body;
   
   if (!email || !password) {
@@ -466,7 +636,7 @@ app.post('/auth/signup', (req, res) => {
   }
   
   try {
-    const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
+    const existing = await dbGet('SELECT id FROM users WHERE email = ?', [email]);
     if (existing) {
       return res.status(400).json({ detail: 'Email already registered' });
     }
@@ -474,8 +644,8 @@ app.post('/auth/signup', (req, res) => {
     const id = uuidv4();
     const passwordHash = hashPassword(password);
     
-    db.prepare('INSERT INTO users (id, email, password_hash, full_name) VALUES (?, ?, ?, ?)')
-      .run(id, email, passwordHash, full_name || null);
+    await dbRun('INSERT INTO users (id, email, password_hash, full_name) VALUES (?, ?, ?, ?)',
+      [id, email, passwordHash, full_name || null]);
     
     const user = { id, email, full_name: full_name || null, created_at: new Date().toISOString() };
     const token = createToken(id);
@@ -486,14 +656,14 @@ app.post('/auth/signup', (req, res) => {
   }
 });
 
-app.post('/auth/signin', (req, res) => {
+app.post('/auth/signin', async (req, res) => {
   const { email, password } = req.body;
   
   if (!email || !password) {
     return res.status(400).json({ detail: 'Email and password are required' });
   }
   
-  const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+  const user = await dbGet('SELECT * FROM users WHERE email = ?', [email]);
   if (!user || !verifyPassword(password, user.password_hash)) {
     return res.status(401).json({ detail: 'Invalid email or password' });
   }
@@ -515,17 +685,17 @@ app.post('/auth/signout', (req, res) => {
 });
 
 // ============= Configuration Endpoints =============
-app.get('/configurations', authMiddleware, (req, res) => {
-  const configs = db.prepare('SELECT * FROM configurations WHERE user_id = ?').all(req.user.id);
+app.get('/configurations', authMiddleware, async (req, res) => {
+  const configs = await dbQuery('SELECT * FROM configurations WHERE user_id = ?', [req.user.id]);
   res.json(configs.map(c => ({ ...c, config: JSON.parse(c.config) })));
 });
 
-app.post('/configurations', authMiddleware, (req, res) => {
+app.post('/configurations', authMiddleware, async (req, res) => {
   const { name, job_type, config, is_default } = req.body;
   const id = uuidv4();
   
-  db.prepare('INSERT INTO configurations (id, user_id, name, job_type, config, is_default) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(id, req.user.id, name, job_type, JSON.stringify(config), is_default ? 1 : 0);
+  await dbRun('INSERT INTO configurations (id, user_id, name, job_type, config, is_default) VALUES (?, ?, ?, ?, ?, ?)',
+    [id, req.user.id, name, job_type, JSON.stringify(config), is_default ? 1 : 0]);
   
   res.json({ id, name, job_type, config, is_default: !!is_default });
 });
@@ -535,8 +705,10 @@ app.get('/', (req, res) => {
   res.json({
     name: 'GIS Automation Hub - Node.js Backend',
     version: '1.0.0',
+    database: DB_TYPE,
     endpoints: {
       health: 'GET /health',
+      configureDb: 'POST /configure-database',
       browse: 'POST /browse',
       listFeatureClasses: 'POST /list-feature-classes',
       execute: 'POST /execute',
@@ -549,18 +721,29 @@ app.get('/', (req, res) => {
   });
 });
 
-app.listen(PORT, () => {
-  console.log(`\n🚀 GIS Automation Hub Backend running on http://localhost:${PORT}`);
-  console.log(`📦 Database: ${dbPath}`);
-  console.log(`\n📋 Endpoints:`);
-  console.log(`   GET  /health               - Health check`);
-  console.log(`   POST /auth/signup          - Create account`);
-  console.log(`   POST /auth/signin          - Sign in`);
-  console.log(`   GET  /auth/me              - Get current user`);
-  console.log(`   POST /browse               - Browse filesystem`);
-  console.log(`   POST /list-feature-classes - List feature classes in GDB`);
-  console.log(`   POST /execute              - Execute GIS job`);
-  console.log(`   GET  /jobs/:jobId          - Get job status`);
-  console.log(`   GET  /configurations       - List saved configurations`);
-  console.log(`   POST /configurations       - Save configuration\n`);
+// Initialize database and start server
+initDatabase().then(() => {
+  app.listen(PORT, () => {
+    console.log(`\n🚀 GIS Automation Hub Backend running on http://localhost:${PORT}`);
+    console.log(`📦 Database Type: ${DB_TYPE}`);
+    if (DB_TYPE === 'sqlserver') {
+      console.log(`   Server: ${sqlServerConfig.server}`);
+      console.log(`   Database: ${sqlServerConfig.database}`);
+    }
+    console.log(`\n📋 Endpoints:`);
+    console.log(`   GET  /health               - Health check`);
+    console.log(`   POST /configure-database   - Test database connection`);
+    console.log(`   POST /auth/signup          - Create account`);
+    console.log(`   POST /auth/signin          - Sign in`);
+    console.log(`   GET  /auth/me              - Get current user`);
+    console.log(`   POST /browse               - Browse filesystem`);
+    console.log(`   POST /list-feature-classes - List feature classes in GDB`);
+    console.log(`   POST /execute              - Execute GIS job`);
+    console.log(`   GET  /jobs/:jobId          - Get job status`);
+    console.log(`   GET  /configurations       - List saved configurations`);
+    console.log(`   POST /configurations       - Save configuration\n`);
+  });
+}).catch(error => {
+  console.error('Failed to initialize database:', error);
+  process.exit(1);
 });
