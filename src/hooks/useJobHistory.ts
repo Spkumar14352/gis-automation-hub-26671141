@@ -35,7 +35,11 @@ export interface SavedConfiguration {
 }
 
 export function useJobHistory() {
-  const { session } = useAuth();
+  const { user, token } = useAuth();
+
+  const getBackendUrl = () => {
+    return localStorage.getItem('python-backend-url') || '';
+  };
 
   const fetchJobs = async (limit = 50): Promise<JobHistory[]> => {
     const { data, error } = await supabase
@@ -64,7 +68,7 @@ export function useJobHistory() {
     config: Record<string, unknown>,
     pythonBackendUrl?: string
   ) => {
-    if (!session) throw new Error('Not authenticated');
+    if (!user) throw new Error('Not authenticated');
 
     const { data, error } = await supabase.functions.invoke('execute-script', {
       body: { jobType, config, pythonBackendUrl },

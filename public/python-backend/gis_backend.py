@@ -2,16 +2,19 @@
 GIS Automation Hub - Python Backend Server
 
 This FastAPI server provides the backend for the GIS Automation Hub web application.
-It handles file browsing and script execution for ArcPy-based GIS workflows.
+It handles file browsing, script execution, and authentication for ArcPy-based GIS workflows.
 
 Requirements:
 - Python 3.9+
 - FastAPI
 - uvicorn
 - arcpy (requires ArcGIS Pro license)
+- PyJWT
+- bcrypt
+- SQLAlchemy
 
 Install dependencies:
-    pip install fastapi uvicorn python-multipart requests
+    pip install fastapi uvicorn python-multipart requests PyJWT bcrypt sqlalchemy
 
 Run the server:
     uvicorn gis_backend:app --host 0.0.0.0 --port 8000 --reload
@@ -25,14 +28,24 @@ import glob
 import json
 import asyncio
 import logging
+import secrets
+import hashlib
 from pathlib import Path
 from typing import Optional, List, Literal
-from datetime import datetime
+from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from pydantic import BaseModel, EmailStr
+
+# JWT and Auth
+import jwt
+import bcrypt
+from sqlalchemy import create_engine, Column, String, DateTime, Boolean
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, Session
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -40,6 +53,93 @@ logger = logging.getLogger(__name__)
 
 # Thread pool for running ArcPy operations (ArcPy is not async-compatible)
 executor = ThreadPoolExecutor(max_workers=4)
+
+# ============================================================================
+# Database Configuration
+# ============================================================================
+
+# SQLite for local development - change to your SQL database connection string
+# Examples:
+#   SQLite: sqlite:///./gis_users.db
+#   PostgreSQL: postgresql://user:password@localhost/dbname
+#   MySQL: mysql+pymysql://user:password@localhost/dbname
+#   SQL Server: mssql+pyodbc://user:password@server/database?driver=ODBC+Driver+17+for+SQL+Server
+DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./gis_users.db")
+
+# JWT Configuration
+JWT_SECRET = os.environ.get("JWT_SECRET", secrets.token_hex(32))
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRATION_HOURS = 24
+
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {})
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+# ============================================================================
+# User Model
+# ============================================================================
+
+class User(Base):
+    __tablename__ = "users"
+    
+    id = Column(String, primary_key=True)
+    email = Column(String, unique=True, index=True, nullable=False)
+    password_hash = Column(String, nullable=False)
+    full_name = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    is_active = Column(Boolean, default=True)
+
+# Create tables
+Base.metadata.create_all(bind=engine)
+
+# Security
+security = HTTPBearer(auto_error=False)
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+def hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
+def verify_password(password: str, password_hash: str) -> bool:
+    return bcrypt.checkpw(password.encode(), password_hash.encode())
+
+def create_token(user_id: str, email: str) -> str:
+    payload = {
+        "sub": user_id,
+        "email": email,
+        "exp": datetime.utcnow() + timedelta(hours=JWT_EXPIRATION_HOURS),
+        "iat": datetime.utcnow()
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+def verify_token(token: str) -> dict:
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        return payload
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token has expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+):
+    if not credentials:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    payload = verify_token(credentials.credentials)
+    user = db.query(User).filter(User.id == payload["sub"]).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    if not user.is_active:
+        raise HTTPException(status_code=401, detail="User is deactivated")
+    return user
 
 app = FastAPI(
     title="GIS Automation Hub Backend",
@@ -611,6 +711,190 @@ async def execute_script(request: ExecuteRequest, background_tasks: BackgroundTa
 
 
 # ============================================================================
+# Authentication Endpoints
+# ============================================================================
+
+class SignUpRequest(BaseModel):
+    email: str
+    password: str
+    full_name: Optional[str] = None
+
+class SignInRequest(BaseModel):
+    email: str
+    password: str
+
+class AuthResponse(BaseModel):
+    user: dict
+    token: str
+
+class UserResponse(BaseModel):
+    id: str
+    email: str
+    full_name: Optional[str]
+    created_at: str
+
+@app.post("/auth/signup", response_model=AuthResponse)
+async def signup(request: SignUpRequest, db: Session = Depends(get_db)):
+    """Register a new user"""
+    # Check if email already exists
+    existing_user = db.query(User).filter(User.email == request.email).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    
+    # Validate email format
+    if "@" not in request.email or "." not in request.email:
+        raise HTTPException(status_code=400, detail="Invalid email format")
+    
+    # Validate password length
+    if len(request.password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    
+    # Create user
+    user_id = secrets.token_hex(16)
+    user = User(
+        id=user_id,
+        email=request.email,
+        password_hash=hash_password(request.password),
+        full_name=request.full_name,
+        created_at=datetime.utcnow()
+    )
+    
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    
+    token = create_token(user.id, user.email)
+    
+    return AuthResponse(
+        user={
+            "id": user.id,
+            "email": user.email,
+            "full_name": user.full_name,
+            "created_at": user.created_at.isoformat()
+        },
+        token=token
+    )
+
+@app.post("/auth/signin", response_model=AuthResponse)
+async def signin(request: SignInRequest, db: Session = Depends(get_db)):
+    """Sign in an existing user"""
+    user = db.query(User).filter(User.email == request.email).first()
+    
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    
+    if not verify_password(request.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    
+    if not user.is_active:
+        raise HTTPException(status_code=401, detail="Account is deactivated")
+    
+    token = create_token(user.id, user.email)
+    
+    return AuthResponse(
+        user={
+            "id": user.id,
+            "email": user.email,
+            "full_name": user.full_name,
+            "created_at": user.created_at.isoformat()
+        },
+        token=token
+    )
+
+@app.get("/auth/me", response_model=UserResponse)
+async def get_me(current_user: User = Depends(get_current_user)):
+    """Get current user info"""
+    return UserResponse(
+        id=current_user.id,
+        email=current_user.email,
+        full_name=current_user.full_name,
+        created_at=current_user.created_at.isoformat()
+    )
+
+@app.post("/auth/signout")
+async def signout():
+    """Sign out (client-side token removal)"""
+    return {"message": "Signed out successfully"}
+
+
+# ============================================================================
+# Feature Class Listing Endpoint
+# ============================================================================
+
+class FeatureClassItem(BaseModel):
+    name: str
+    type: str  # Point, Polyline, Polygon, etc.
+    feature_count: int
+    spatial_reference: Optional[str] = None
+
+class FeatureClassListResponse(BaseModel):
+    gdb_path: str
+    feature_classes: List[FeatureClassItem]
+    tables: List[str]
+
+@app.post("/list-feature-classes", response_model=FeatureClassListResponse)
+async def list_feature_classes(path: str):
+    """
+    List all feature classes and tables in a geodatabase.
+    """
+    if not path:
+        raise HTTPException(status_code=400, detail="Path is required")
+    
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail=f"Path not found: {path}")
+    
+    if not is_geodatabase(path):
+        raise HTTPException(status_code=400, detail="Path must be a geodatabase (.gdb)")
+    
+    try:
+        import arcpy
+        
+        arcpy.env.workspace = path
+        
+        feature_classes = []
+        for fc in arcpy.ListFeatureClasses() or []:
+            try:
+                desc = arcpy.Describe(fc)
+                count = int(arcpy.GetCount_management(fc)[0])
+                sr = desc.spatialReference.name if desc.spatialReference else "Unknown"
+                
+                feature_classes.append(FeatureClassItem(
+                    name=fc,
+                    type=desc.shapeType,
+                    feature_count=count,
+                    spatial_reference=sr
+                ))
+            except Exception as e:
+                logger.warning(f"Error reading feature class {fc}: {e}")
+        
+        tables = arcpy.ListTables() or []
+        
+        return FeatureClassListResponse(
+            gdb_path=path,
+            feature_classes=feature_classes,
+            tables=list(tables)
+        )
+        
+    except ImportError:
+        # Mock data for testing without ArcPy
+        logger.warning("ArcPy not available, returning mock data")
+        return FeatureClassListResponse(
+            gdb_path=path,
+            feature_classes=[
+                FeatureClassItem(name="Parcels", type="Polygon", feature_count=12456, spatial_reference="WGS 1984"),
+                FeatureClassItem(name="Roads", type="Polyline", feature_count=8234, spatial_reference="WGS 1984"),
+                FeatureClassItem(name="Buildings", type="Polygon", feature_count=15678, spatial_reference="WGS 1984"),
+                FeatureClassItem(name="Utilities", type="Polyline", feature_count=4521, spatial_reference="WGS 1984"),
+                FeatureClassItem(name="Zoning", type="Polygon", feature_count=2345, spatial_reference="WGS 1984"),
+            ],
+            tables=["LandUse", "Metadata", "AttributeLookup"]
+        )
+    except Exception as e:
+        logger.error(f"Error listing feature classes: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
 # Health Check
 # ============================================================================
 
@@ -640,7 +924,11 @@ async def root():
         "endpoints": {
             "/browse": "Browse server filesystem for GDBs/SDEs",
             "/execute": "Execute GIS automation scripts",
-            "/health": "Health check"
+            "/health": "Health check",
+            "/auth/signup": "Register new user",
+            "/auth/signin": "Sign in user",
+            "/auth/me": "Get current user",
+            "/list-feature-classes": "List feature classes in a GDB"
         }
     }
 

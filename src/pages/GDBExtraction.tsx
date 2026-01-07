@@ -7,6 +7,7 @@ import { PathInput } from '@/components/common/PathInput';
 import { ConsolePanel } from '@/components/common/ConsolePanel';
 import { StatusBadge } from '@/components/common/StatusBadge';
 import { ResultsTable } from '@/components/common/ResultsTable';
+import { FeatureClassSelector } from '@/components/common/FeatureClassSelector';
 import { useExecutionSimulator } from '@/hooks/useExecutionSimulator';
 import { useLocalStorage } from '@/hooks/useLocalStorage';
 
@@ -49,6 +50,7 @@ export default function GDBExtraction() {
   const [config, setConfig] = useLocalStorage('gdb-extraction-config', {
     sourceGdbPath: '',
     outputFolder: '',
+    selectedFeatureClasses: [] as string[],
   });
   const [results, setResults] = useState<ExtractedFile[]>([]);
   const { status, logs, execute, reset } = useExecutionSimulator();
@@ -93,11 +95,18 @@ export default function GDBExtraction() {
             <PathInput
               label="Source Geodatabase"
               value={config.sourceGdbPath}
-              onChange={(value) => setConfig({ ...config, sourceGdbPath: value })}
+              onChange={(value) => setConfig({ ...config, sourceGdbPath: value, selectedFeatureClasses: [] })}
               placeholder="C:\Data\MyDatabase.gdb"
               type="database"
               description="Path to the source File Geodatabase (.gdb)"
             />
+
+            <FeatureClassSelector
+              gdbPath={config.sourceGdbPath}
+              selectedFeatureClasses={config.selectedFeatureClasses}
+              onSelectionChange={(selected) => setConfig({ ...config, selectedFeatureClasses: selected })}
+            />
+
             <PathInput
               label="Output Folder"
               value={config.outputFolder}
