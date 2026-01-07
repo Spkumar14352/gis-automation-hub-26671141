@@ -14,6 +14,7 @@ import Comparison from "./pages/Comparison";
 import JobHistory from "./pages/JobHistory";
 import Settings from "./pages/Settings";
 import Dashboard from "./pages/Dashboard";
+import Profile from "./pages/Profile";
 import NotFound from "./pages/NotFound";
 import { useEffect } from "react";
 
@@ -53,6 +54,7 @@ const App = () => (
               <Route path="/comparison" element={<Comparison />} />
               <Route path="/history" element={<JobHistory />} />
               <Route path="/settings" element={<Settings />} />
+              <Route path="/profile" element={<Profile />} />
             </Route>
             <Route path="*" element={<NotFound />} />
           </Routes>
