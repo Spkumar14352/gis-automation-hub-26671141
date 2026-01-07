@@ -15,13 +15,139 @@ const jobs = new Map();
 app.use(cors());
 app.use(express.json());
 
+// Runtime python path override
+let runtimePythonPath = null;
+
 // Health check endpoint
 app.get('/health', (req, res) => {
+  const pythonPath = runtimePythonPath || process.env.ARCPY_PYTHON_PATH || 'python';
   res.json({
     status: 'healthy',
     timestamp: new Date().toISOString(),
-    pythonPath: process.env.ARCPY_PYTHON_PATH || 'python',
+    pythonPath: pythonPath,
     platform: process.platform
+  });
+});
+
+// Common ArcGIS Pro Python installation paths
+const COMMON_PYTHON_PATHS = {
+  win32: [
+    'C:\\Program Files\\ArcGIS\\Pro\\bin\\Python\\envs\\arcgispro-py3\\python.exe',
+    'C:\\Program Files\\ArcGIS\\Pro\\bin\\Python\\python3.exe',
+    'C:\\Program Files\\ArcGIS\\Pro\\bin\\Python\\envs\\arcgispro-py3\\Scripts\\python.exe',
+    'C:\\Program Files (x86)\\ArcGIS\\Pro\\bin\\Python\\envs\\arcgispro-py3\\python.exe',
+    'C:\\Python312\\python.exe',
+    'C:\\Python311\\python.exe',
+    'C:\\Python310\\python.exe',
+    'C:\\Python39\\python.exe',
+    'C:\\Users\\' + (process.env.USERNAME || 'User') + '\\AppData\\Local\\Programs\\Python\\Python312\\python.exe',
+    'C:\\Users\\' + (process.env.USERNAME || 'User') + '\\AppData\\Local\\Programs\\Python\\Python311\\python.exe',
+    'C:\\Users\\' + (process.env.USERNAME || 'User') + '\\AppData\\Local\\Programs\\Python\\Python310\\python.exe',
+  ],
+  linux: [
+    '/usr/bin/python3',
+    '/usr/local/bin/python3',
+    '/opt/arcgis/python/bin/python3',
+  ],
+  darwin: [
+    '/usr/bin/python3',
+    '/usr/local/bin/python3',
+    '/opt/homebrew/bin/python3',
+  ]
+};
+
+// Detect Python installations endpoint
+app.get('/detect-python', async (req, res) => {
+  const platform = process.platform;
+  const pathsToCheck = COMMON_PYTHON_PATHS[platform] || COMMON_PYTHON_PATHS.linux;
+  const detectedPythons = [];
+
+  for (const pythonPath of pathsToCheck) {
+    try {
+      if (fs.existsSync(pythonPath)) {
+        // Try to get Python version and check for ArcPy
+        const result = await checkPythonInstallation(pythonPath);
+        detectedPythons.push({
+          path: pythonPath,
+          version: result.version,
+          hasArcpy: result.hasArcpy,
+          isDefault: pythonPath === (runtimePythonPath || process.env.ARCPY_PYTHON_PATH)
+        });
+      }
+    } catch (error) {
+      // Path doesn't exist or can't be accessed, skip it
+    }
+  }
+
+  // Sort: ArcPy-enabled first, then by path
+  detectedPythons.sort((a, b) => {
+    if (a.hasArcpy && !b.hasArcpy) return -1;
+    if (!a.hasArcpy && b.hasArcpy) return 1;
+    return a.path.localeCompare(b.path);
+  });
+
+  res.json({ pythonInstallations: detectedPythons });
+});
+
+// Helper function to check Python installation
+function checkPythonInstallation(pythonPath) {
+  return new Promise((resolve) => {
+    const checkScript = `
+import sys
+print(f"VERSION:{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")
+try:
+    import arcpy
+    print("ARCPY:true")
+except ImportError:
+    print("ARCPY:false")
+`;
+    
+    const pythonProcess = spawn(pythonPath, ['-c', checkScript]);
+    let stdout = '';
+    
+    pythonProcess.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    pythonProcess.on('close', (code) => {
+      const versionMatch = stdout.match(/VERSION:(\d+\.\d+\.\d+)/);
+      const arcpyMatch = stdout.match(/ARCPY:(true|false)/);
+      
+      resolve({
+        version: versionMatch ? versionMatch[1] : null,
+        hasArcpy: arcpyMatch ? arcpyMatch[1] === 'true' : false
+      });
+    });
+
+    pythonProcess.on('error', () => {
+      resolve({ version: null, hasArcpy: false });
+    });
+
+    // Timeout after 5 seconds
+    setTimeout(() => {
+      pythonProcess.kill();
+      resolve({ version: null, hasArcpy: false });
+    }, 5000);
+  });
+}
+
+// Set Python path at runtime
+app.post('/set-python-path', (req, res) => {
+  const { pythonPath } = req.body;
+  
+  if (!pythonPath) {
+    return res.status(400).json({ error: 'pythonPath is required' });
+  }
+
+  if (!fs.existsSync(pythonPath)) {
+    return res.status(400).json({ error: 'Python path does not exist' });
+  }
+
+  runtimePythonPath = pythonPath;
+  res.json({ 
+    success: true, 
+    message: 'Python path updated',
+    pythonPath: runtimePythonPath
   });
 });
 
@@ -73,7 +199,7 @@ app.post('/list-feature-classes', (req, res) => {
     return res.status(400).json({ error: 'gdbPath is required' });
   }
 
-  const pythonPath = process.env.ARCPY_PYTHON_PATH || 'python';
+  const pythonPath = runtimePythonPath || process.env.ARCPY_PYTHON_PATH || 'python';
   const scriptPath = path.join(__dirname, 'scripts', 'list_feature_classes.py');
 
   const pythonProcess = spawn(pythonPath, [scriptPath, gdbPath]);
@@ -143,7 +269,7 @@ async function runPythonJob(jobId, jobType, config, callbackUrl) {
   const job = jobs.get(jobId);
   if (!job) return;
 
-  const pythonPath = process.env.ARCPY_PYTHON_PATH || 'python';
+  const pythonPath = runtimePythonPath || process.env.ARCPY_PYTHON_PATH || 'python';
   const scriptMap = {
     'gdb_extraction': 'gdb_extraction.py',
     'sde_conversion': 'sde_conversion.py',

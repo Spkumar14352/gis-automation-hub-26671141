@@ -3,7 +3,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Check, ChevronRight, ChevronLeft, Server, Folder, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Check, ChevronRight, ChevronLeft, Server, Loader2, AlertCircle, CheckCircle2, Search, FolderSearch, Copy } from 'lucide-react';
 import { toast } from 'sonner';
 import { useLocalStorage } from '@/hooks/useLocalStorage';
 
@@ -13,19 +13,20 @@ interface SetupWizardProps {
   onComplete?: () => void;
 }
 
-const COMMON_PYTHON_PATHS = [
-  'C:\\Program Files\\ArcGIS\\Pro\\bin\\Python\\envs\\arcgispro-py3\\python.exe',
-  'C:\\Python39\\python.exe',
-  'C:\\Python310\\python.exe',
-  'C:\\Python311\\python.exe',
-  '/usr/bin/python3',
-  '/usr/local/bin/python3',
-];
+interface DetectedPython {
+  path: string;
+  version?: string;
+  hasArcpy: boolean;
+  isDefault?: boolean;
+}
 
 export function SetupWizard({ open, onOpenChange, onComplete }: SetupWizardProps) {
   const [step, setStep] = useState(1);
   const [backendUrl, setBackendUrl] = useLocalStorage('python-backend-url', 'http://localhost:5000');
   const [testing, setTesting] = useState(false);
+  const [detecting, setDetecting] = useState(false);
+  const [detectedPythons, setDetectedPythons] = useState<DetectedPython[]>([]);
+  const [selectedPython, setSelectedPython] = useState<string | null>(null);
   const [connectionResult, setConnectionResult] = useState<{
     success: boolean;
     arcpyAvailable?: boolean;
@@ -33,7 +34,7 @@ export function SetupWizard({ open, onOpenChange, onComplete }: SetupWizardProps
     error?: string;
   } | null>(null);
 
-  const totalSteps = 3;
+  const totalSteps = 4;
 
   const testConnection = async () => {
     setTesting(true);
@@ -65,12 +66,74 @@ export function SetupWizard({ open, onOpenChange, onComplete }: SetupWizardProps
     }
   };
 
+  const detectPythonPaths = async () => {
+    setDetecting(true);
+    setDetectedPythons([]);
+
+    try {
+      const response = await fetch(`${backendUrl}/detect-python`, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setDetectedPythons(data.pythonInstallations || []);
+        if (data.pythonInstallations?.length > 0) {
+          // Auto-select the first ArcPy-enabled Python or the first one
+          const arcpyPython = data.pythonInstallations.find((p: DetectedPython) => p.hasArcpy);
+          setSelectedPython(arcpyPython?.path || data.pythonInstallations[0].path);
+          toast.success(`Found ${data.pythonInstallations.length} Python installation(s)`);
+        } else {
+          toast.info('No Python installations found. You can enter the path manually.');
+        }
+      } else {
+        throw new Error('Detection failed');
+      }
+    } catch (error) {
+      toast.error('Could not detect Python. Make sure the backend is running.');
+      setDetectedPythons([]);
+    } finally {
+      setDetecting(false);
+    }
+  };
+
+  const applyPythonPath = async () => {
+    if (!selectedPython) return;
+
+    try {
+      const response = await fetch(`${backendUrl}/set-python-path`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pythonPath: selectedPython }),
+      });
+
+      if (response.ok) {
+        toast.success('Python path configured!');
+        setStep(step + 1);
+      } else {
+        throw new Error('Failed to set Python path');
+      }
+    } catch (error) {
+      // Even if the endpoint doesn't exist, continue - the path can be set via env var
+      toast.info('Path selected. Set ARCPY_PYTHON_PATH on your server to apply.');
+      setStep(step + 1);
+    }
+  };
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+    toast.success('Copied to clipboard!');
+  };
+
   const handleComplete = () => {
     toast.success('Setup completed! You can now use GIS tools.');
     onComplete?.();
     onOpenChange(false);
     setStep(1);
     setConnectionResult(null);
+    setDetectedPythons([]);
+    setSelectedPython(null);
   };
 
   const handleSkip = () => {
@@ -78,11 +141,13 @@ export function SetupWizard({ open, onOpenChange, onComplete }: SetupWizardProps
     onOpenChange(false);
     setStep(1);
     setConnectionResult(null);
+    setDetectedPythons([]);
+    setSelectedPython(null);
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Server className="w-5 h-5 text-primary" />
@@ -95,7 +160,7 @@ export function SetupWizard({ open, onOpenChange, onComplete }: SetupWizardProps
 
         {/* Progress indicator */}
         <div className="flex items-center gap-2 py-4">
-          {[1, 2, 3].map((s) => (
+          {[1, 2, 3, 4].map((s) => (
             <div key={s} className="flex items-center">
               <div
                 className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-colors ${
@@ -110,7 +175,7 @@ export function SetupWizard({ open, onOpenChange, onComplete }: SetupWizardProps
               </div>
               {s < totalSteps && (
                 <div
-                  className={`w-12 h-0.5 mx-1 ${
+                  className={`w-8 h-0.5 mx-1 ${
                     s < step ? 'bg-primary' : 'bg-muted'
                   }`}
                 />
@@ -120,7 +185,7 @@ export function SetupWizard({ open, onOpenChange, onComplete }: SetupWizardProps
         </div>
 
         {/* Step content */}
-        <div className="min-h-[200px]">
+        <div className="min-h-[240px]">
           {step === 1 && (
             <div className="space-y-4">
               <h3 className="font-medium">Welcome to GIS Automation Hub</h3>
@@ -191,6 +256,100 @@ export function SetupWizard({ open, onOpenChange, onComplete }: SetupWizardProps
 
           {step === 3 && (
             <div className="space-y-4">
+              <h3 className="font-medium flex items-center gap-2">
+                <FolderSearch className="w-5 h-5" />
+                Python Path Detection
+              </h3>
+              <p className="text-sm text-muted-foreground">
+                Scan your server for ArcGIS Pro Python installations.
+              </p>
+
+              <Button 
+                onClick={detectPythonPaths} 
+                disabled={detecting}
+                className="w-full"
+              >
+                {detecting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Scanning for Python installations...
+                  </>
+                ) : (
+                  <>
+                    <Search className="w-4 h-4 mr-2" />
+                    Auto-Detect Python Paths
+                  </>
+                )}
+              </Button>
+
+              {detectedPythons.length > 0 && (
+                <div className="space-y-2">
+                  <Label>Detected Python Installations:</Label>
+                  <div className="space-y-2 max-h-[180px] overflow-y-auto">
+                    {detectedPythons.map((python, index) => (
+                      <div
+                        key={index}
+                        className={`p-3 rounded-lg border cursor-pointer transition-colors ${
+                          selectedPython === python.path
+                            ? 'border-primary bg-primary/5'
+                            : 'border-border hover:border-primary/50'
+                        }`}
+                        onClick={() => setSelectedPython(python.path)}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              {selectedPython === python.path && (
+                                <CheckCircle2 className="w-4 h-4 text-primary flex-shrink-0" />
+                              )}
+                              <span className={`text-xs font-medium ${python.hasArcpy ? 'text-green-600 dark:text-green-400' : 'text-muted-foreground'}`}>
+                                {python.hasArcpy ? '✓ ArcPy Available' : 'No ArcPy'}
+                              </span>
+                              {python.version && (
+                                <span className="text-xs text-muted-foreground">
+                                  v{python.version}
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-xs font-mono text-muted-foreground truncate mt-1">
+                              {python.path}
+                            </p>
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="flex-shrink-0 h-7 w-7 p-0"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              copyToClipboard(python.path);
+                            }}
+                          >
+                            <Copy className="w-3 h-3" />
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {detectedPythons.length === 0 && !detecting && (
+                <div className="p-4 rounded-lg bg-muted/50">
+                  <p className="text-sm font-medium mb-2">Common ArcGIS Pro Python paths:</p>
+                  <div className="space-y-1 text-xs text-muted-foreground font-mono">
+                    <p>C:\Program Files\ArcGIS\Pro\bin\Python\envs\arcgispro-py3\python.exe</p>
+                    <p>C:\Program Files\ArcGIS\Pro\bin\Python\python3.exe</p>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-3">
+                    Set the <code className="bg-muted px-1 rounded">ARCPY_PYTHON_PATH</code> environment variable on your server.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {step === 4 && (
+            <div className="space-y-4">
               <h3 className="font-medium">Test Connection</h3>
               <p className="text-sm text-muted-foreground">
                 Let's verify your backend is running and accessible.
@@ -233,11 +392,9 @@ export function SetupWizard({ open, onOpenChange, onComplete }: SetupWizardProps
                           {connectionResult.success ? 'Connection successful!' : 'Connection failed'}
                         </p>
                         {connectionResult.success ? (
-                          <>
-                            <p className="text-xs">
-                              Python path: <code className="bg-muted px-1 rounded">{connectionResult.pythonPath}</code>
-                            </p>
-                          </>
+                          <p className="text-xs">
+                            Python path: <code className="bg-muted px-1 rounded">{connectionResult.pythonPath}</code>
+                          </p>
                         ) : (
                           <p className="text-xs">{connectionResult.error}</p>
                         )}
@@ -275,7 +432,7 @@ export function SetupWizard({ open, onOpenChange, onComplete }: SetupWizardProps
               Skip
             </Button>
             {step < totalSteps ? (
-              <Button onClick={() => setStep(step + 1)}>
+              <Button onClick={() => step === 3 && selectedPython ? applyPythonPath() : setStep(step + 1)}>
                 Next
                 <ChevronRight className="w-4 h-4 ml-1" />
               </Button>
