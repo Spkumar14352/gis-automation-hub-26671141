@@ -26,7 +26,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   const getBackendUrl = () => {
-    return localStorage.getItem('python-backend-url') || '';
+    const url = localStorage.getItem('python-backend-url') || '';
+    // Remove any accidental quotes that may have been stored
+    return url.replace(/^["']|["']$/g, '').trim();
   };
 
   useEffect(() => {
