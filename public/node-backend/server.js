@@ -4,12 +4,125 @@ const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Store active jobs in memory
 const jobs = new Map();
+
+// ============= SQLite Database Setup =============
+const sqlite3 = require('better-sqlite3');
+const dbPath = process.env.DATABASE_PATH || path.join(__dirname, 'gis_hub.db');
+const db = sqlite3(dbPath);
+
+// Create tables
+db.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    email TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    full_name TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+  
+  CREATE TABLE IF NOT EXISTS configurations (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    job_type TEXT NOT NULL,
+    config TEXT NOT NULL,
+    is_default INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+  );
+  
+  CREATE TABLE IF NOT EXISTS job_history (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    job_type TEXT NOT NULL,
+    config TEXT NOT NULL,
+    status TEXT DEFAULT 'pending',
+    logs TEXT DEFAULT '[]',
+    result TEXT,
+    started_at TEXT,
+    completed_at TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+  );
+`);
+
+console.log(`📦 Database initialized at: ${dbPath}`);
+
+// ============= Auth Helpers =============
+const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
+
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
+  return `${salt}:${hash}`;
+}
+
+function verifyPassword(password, storedHash) {
+  const [salt, hash] = storedHash.split(':');
+  const verifyHash = crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
+  return hash === verifyHash;
+}
+
+function createToken(userId) {
+  const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
+  const payload = Buffer.from(JSON.stringify({ 
+    sub: userId, 
+    iat: Math.floor(Date.now() / 1000),
+    exp: Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60) // 7 days
+  })).toString('base64url');
+  const signature = crypto.createHmac('sha256', JWT_SECRET)
+    .update(`${header}.${payload}`)
+    .digest('base64url');
+  return `${header}.${payload}.${signature}`;
+}
+
+function verifyToken(token) {
+  try {
+    const [header, payload, signature] = token.split('.');
+    const expectedSig = crypto.createHmac('sha256', JWT_SECRET)
+      .update(`${header}.${payload}`)
+      .digest('base64url');
+    
+    if (signature !== expectedSig) return null;
+    
+    const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString());
+    if (decoded.exp < Math.floor(Date.now() / 1000)) return null;
+    
+    return decoded;
+  } catch {
+    return null;
+  }
+}
+
+// Auth middleware
+function authMiddleware(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ detail: 'Not authenticated' });
+  }
+  
+  const token = authHeader.substring(7);
+  const decoded = verifyToken(token);
+  if (!decoded) {
+    return res.status(401).json({ detail: 'Invalid or expired token' });
+  }
+  
+  const user = db.prepare('SELECT id, email, full_name, created_at FROM users WHERE id = ?').get(decoded.sub);
+  if (!user) {
+    return res.status(401).json({ detail: 'User not found' });
+  }
+  
+  req.user = user;
+  next();
+}
 
 // Middleware
 app.use(cors());
@@ -344,6 +457,79 @@ async function sendCallback(callbackUrl, jobId, status, logs, result) {
   }
 }
 
+// ============= Auth Endpoints =============
+app.post('/auth/signup', (req, res) => {
+  const { email, password, full_name } = req.body;
+  
+  if (!email || !password) {
+    return res.status(400).json({ detail: 'Email and password are required' });
+  }
+  
+  try {
+    const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
+    if (existing) {
+      return res.status(400).json({ detail: 'Email already registered' });
+    }
+    
+    const id = uuidv4();
+    const passwordHash = hashPassword(password);
+    
+    db.prepare('INSERT INTO users (id, email, password_hash, full_name) VALUES (?, ?, ?, ?)')
+      .run(id, email, passwordHash, full_name || null);
+    
+    const user = { id, email, full_name: full_name || null, created_at: new Date().toISOString() };
+    const token = createToken(id);
+    
+    res.json({ user, token });
+  } catch (error) {
+    res.status(500).json({ detail: error.message });
+  }
+});
+
+app.post('/auth/signin', (req, res) => {
+  const { email, password } = req.body;
+  
+  if (!email || !password) {
+    return res.status(400).json({ detail: 'Email and password are required' });
+  }
+  
+  const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+  if (!user || !verifyPassword(password, user.password_hash)) {
+    return res.status(401).json({ detail: 'Invalid email or password' });
+  }
+  
+  const token = createToken(user.id);
+  
+  res.json({
+    user: { id: user.id, email: user.email, full_name: user.full_name, created_at: user.created_at },
+    token
+  });
+});
+
+app.get('/auth/me', authMiddleware, (req, res) => {
+  res.json({ user: req.user });
+});
+
+app.post('/auth/signout', (req, res) => {
+  res.json({ message: 'Signed out successfully' });
+});
+
+// ============= Configuration Endpoints =============
+app.get('/configurations', authMiddleware, (req, res) => {
+  const configs = db.prepare('SELECT * FROM configurations WHERE user_id = ?').all(req.user.id);
+  res.json(configs.map(c => ({ ...c, config: JSON.parse(c.config) })));
+});
+
+app.post('/configurations', authMiddleware, (req, res) => {
+  const { name, job_type, config, is_default } = req.body;
+  const id = uuidv4();
+  
+  db.prepare('INSERT INTO configurations (id, user_id, name, job_type, config, is_default) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(id, req.user.id, name, job_type, JSON.stringify(config), is_default ? 1 : 0);
+  
+  res.json({ id, name, job_type, config, is_default: !!is_default });
+});
+
 // Root endpoint
 app.get('/', (req, res) => {
   res.json({
@@ -354,17 +540,27 @@ app.get('/', (req, res) => {
       browse: 'POST /browse',
       listFeatureClasses: 'POST /list-feature-classes',
       execute: 'POST /execute',
-      jobStatus: 'GET /jobs/:jobId'
+      jobStatus: 'GET /jobs/:jobId',
+      authSignup: 'POST /auth/signup',
+      authSignin: 'POST /auth/signin',
+      authMe: 'GET /auth/me',
+      configurations: 'GET/POST /configurations'
     }
   });
 });
 
 app.listen(PORT, () => {
   console.log(`\n🚀 GIS Automation Hub Backend running on http://localhost:${PORT}`);
+  console.log(`📦 Database: ${dbPath}`);
   console.log(`\n📋 Endpoints:`);
-  console.log(`   GET  /health              - Health check`);
-  console.log(`   POST /browse              - Browse filesystem`);
+  console.log(`   GET  /health               - Health check`);
+  console.log(`   POST /auth/signup          - Create account`);
+  console.log(`   POST /auth/signin          - Sign in`);
+  console.log(`   GET  /auth/me              - Get current user`);
+  console.log(`   POST /browse               - Browse filesystem`);
   console.log(`   POST /list-feature-classes - List feature classes in GDB`);
-  console.log(`   POST /execute             - Execute GIS job`);
-  console.log(`   GET  /jobs/:jobId         - Get job status\n`);
+  console.log(`   POST /execute              - Execute GIS job`);
+  console.log(`   GET  /jobs/:jobId          - Get job status`);
+  console.log(`   GET  /configurations       - List saved configurations`);
+  console.log(`   POST /configurations       - Save configuration\n`);
 });
