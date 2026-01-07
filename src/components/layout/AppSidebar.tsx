@@ -1,4 +1,4 @@
-import { Database, GitCompare, ArrowLeftRight, Map, Settings, ChevronLeft, History, LogOut } from 'lucide-react';
+import { Database, GitCompare, ArrowLeftRight, Map, Settings, ChevronLeft, History, LogOut, LayoutDashboard } from 'lucide-react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { useState } from 'react';
@@ -7,6 +7,12 @@ import { useAuth } from '@/contexts/AuthContext';
 import { toast } from 'sonner';
 
 const navItems = [
+  {
+    title: 'Dashboard',
+    description: 'Overview & quick actions',
+    icon: LayoutDashboard,
+    path: '/dashboard',
+  },
   {
     title: 'GDB Extraction',
     description: 'Extract from Geodatabase',
