@@ -1,1 +1,10 @@
 project_id = "npvourivbuycwkxtwcxn"
+
+[functions.execute-script]
+verify_jwt = false
+
+[functions.job-callback]
+verify_jwt = false
+
+[functions.browse-filesystem]
+verify_jwt = false

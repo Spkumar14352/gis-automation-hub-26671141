@@ -1,7 +1,9 @@
-import { Folder, Database, Info } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Folder, Database, Info, ChevronRight, ChevronUp, HardDrive, Loader2, Server } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   Tooltip,
   TooltipContent,
@@ -16,6 +18,8 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
+import { supabase } from '@/integrations/supabase/client';
+import { useLocalStorage } from '@/hooks/useLocalStorage';
 
 interface PathInputProps {
   label: string;
@@ -25,6 +29,21 @@ interface PathInputProps {
   type?: 'folder' | 'database';
   description?: string;
   className?: string;
+}
+
+interface FileItem {
+  name: string;
+  path: string;
+  type: 'gdb' | 'sde' | 'folder' | 'file';
+  size?: number;
+  modified?: string;
+}
+
+interface BrowseResponse {
+  current_path: string;
+  parent_path: string | null;
+  items: FileItem[];
+  drives?: string[];
 }
 
 export function PathInput({
@@ -37,19 +56,94 @@ export function PathInput({
   className,
 }: PathInputProps) {
   const Icon = type === 'database' ? Database : Folder;
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [browseData, setBrowseData] = useState<BrowseResponse | null>(null);
+  const [currentPath, setCurrentPath] = useState('');
+  const [pythonBackendUrl] = useLocalStorage('python-backend-url', '');
 
-  const examplePaths = type === 'database' 
-    ? [
-        'C:\\Data\\MyDatabase.gdb',
-        'D:\\GIS\\Projects\\CityData.gdb',
-        '\\\\server\\share\\Enterprise.sde',
-        'sde:sqlserver:SERVER\\INSTANCE',
-      ]
-    : [
-        'C:\\Output\\Shapefiles',
-        'D:\\GIS\\Exports',
-        '\\\\server\\share\\Output',
-      ];
+  const browseFilesystem = async (path: string = '') => {
+    if (!pythonBackendUrl) {
+      setError('Python backend URL not configured. Go to Settings to configure it.');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const { data, error: invokeError } = await supabase.functions.invoke('browse-filesystem', {
+        body: { 
+          path, 
+          pythonBackendUrl,
+          type: type === 'database' ? 'gdb' : 'folder'
+        },
+      });
+
+      if (invokeError) {
+        throw new Error(invokeError.message);
+      }
+
+      if (data.error) {
+        throw new Error(data.message || data.error);
+      }
+
+      setBrowseData(data);
+      setCurrentPath(data.current_path || '');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to browse filesystem';
+      setError(message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleOpen = (isOpen: boolean) => {
+    setOpen(isOpen);
+    if (isOpen) {
+      setBrowseData(null);
+      setError(null);
+      browseFilesystem('');
+    }
+  };
+
+  const handleItemClick = (item: FileItem) => {
+    if (item.type === 'folder') {
+      browseFilesystem(item.path);
+    } else {
+      onChange(item.path);
+      setOpen(false);
+    }
+  };
+
+  const handleNavigateUp = () => {
+    if (browseData?.parent_path) {
+      browseFilesystem(browseData.parent_path);
+    } else {
+      browseFilesystem('');
+    }
+  };
+
+  const handleSelectCurrent = () => {
+    if (currentPath) {
+      onChange(currentPath);
+      setOpen(false);
+    }
+  };
+
+  const getItemIcon = (itemType: FileItem['type']) => {
+    switch (itemType) {
+      case 'gdb':
+        return <Database className="w-4 h-4 text-primary" />;
+      case 'sde':
+        return <Server className="w-4 h-4 text-accent" />;
+      case 'folder':
+        return <Folder className="w-4 h-4 text-muted-foreground" />;
+      default:
+        return <Folder className="w-4 h-4 text-muted-foreground" />;
+    }
+  };
 
   return (
     <div className={cn('space-y-2', className)}>
@@ -61,8 +155,8 @@ export function PathInput({
           </TooltipTrigger>
           <TooltipContent side="top" className="max-w-xs">
             <p className="text-xs">
-              Enter the path as it exists on your Python/ArcPy server. 
-              This web app sends commands to your backend server which has access to these paths.
+              Enter the path as it exists on your Python/ArcPy server, 
+              or use the browse button to navigate the server filesystem.
             </p>
           </TooltipContent>
         </Tooltip>
@@ -80,53 +174,110 @@ export function PathInput({
             className="pl-10 font-mono text-sm"
           />
         </div>
-        <Dialog>
+        <Dialog open={open} onOpenChange={handleOpen}>
           <DialogTrigger asChild>
             <Button variant="secondary" size="icon" className="shrink-0">
               <Folder className="w-4 h-4" />
             </Button>
           </DialogTrigger>
-          <DialogContent>
+          <DialogContent className="max-w-lg">
             <DialogHeader>
-              <DialogTitle>Server-Side Paths</DialogTitle>
+              <DialogTitle>Browse Server Filesystem</DialogTitle>
               <DialogDescription>
-                This is a web-based interface that connects to a Python/ArcPy backend server.
-                Enter paths as they exist on your server machine.
+                Navigate to select a {type === 'database' ? 'geodatabase or SDE connection' : 'folder'}
               </DialogDescription>
             </DialogHeader>
-            <div className="space-y-4">
-              <div className="p-4 rounded-lg bg-muted">
-                <p className="text-sm font-medium mb-2">How it works:</p>
-                <ol className="text-sm text-muted-foreground space-y-1 list-decimal list-inside">
-                  <li>Enter the path to your GDB/SDE on the server</li>
-                  <li>This web app sends the request to your Python backend</li>
-                  <li>The Python backend (with ArcPy) processes the data</li>
-                  <li>Results are streamed back to this interface</li>
-                </ol>
-              </div>
-              <div>
-                <p className="text-sm font-medium mb-2">Example paths:</p>
-                <div className="space-y-1">
-                  {examplePaths.map((path, index) => (
-                    <button
-                      key={index}
-                      onClick={() => {
-                        onChange(path);
-                      }}
-                      className="w-full text-left px-3 py-2 rounded-md bg-muted/50 hover:bg-muted transition-colors font-mono text-xs truncate"
-                    >
-                      {path}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="p-3 rounded-lg border border-primary/20 bg-primary/5">
-                <p className="text-xs text-muted-foreground">
-                  <strong className="text-foreground">Note:</strong> To enable file browsing, 
-                  configure your Python backend to expose a file listing API endpoint.
+
+            {!pythonBackendUrl ? (
+              <div className="p-6 text-center">
+                <Server className="w-12 h-12 mx-auto text-muted-foreground mb-4" />
+                <p className="font-medium mb-2">Python Backend Not Configured</p>
+                <p className="text-sm text-muted-foreground mb-4">
+                  To browse server files, configure your Python backend URL in Settings.
                 </p>
+                <Button variant="outline" onClick={() => setOpen(false)}>
+                  Close
+                </Button>
               </div>
-            </div>
+            ) : loading ? (
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="w-6 h-6 animate-spin text-primary" />
+              </div>
+            ) : error ? (
+              <div className="p-4 rounded-lg bg-destructive/10 text-destructive">
+                <p className="text-sm">{error}</p>
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  className="mt-3"
+                  onClick={() => browseFilesystem('')}
+                >
+                  Retry
+                </Button>
+              </div>
+            ) : browseData ? (
+              <div className="space-y-3">
+                {/* Current Path */}
+                <div className="flex items-center gap-2 p-2 rounded-lg bg-muted">
+                  <HardDrive className="w-4 h-4 text-muted-foreground" />
+                  <span className="font-mono text-sm truncate flex-1">
+                    {currentPath || 'Select a drive'}
+                  </span>
+                  {currentPath && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={handleNavigateUp}
+                    >
+                      <ChevronUp className="w-4 h-4 mr-1" />
+                      Up
+                    </Button>
+                  )}
+                </div>
+
+                {/* File List */}
+                <ScrollArea className="h-[300px] border rounded-lg">
+                  {browseData.items.length === 0 ? (
+                    <div className="flex items-center justify-center h-full text-muted-foreground">
+                      No items found
+                    </div>
+                  ) : (
+                    <div className="p-2 space-y-1">
+                      {browseData.items.map((item, index) => (
+                        <button
+                          key={index}
+                          onClick={() => handleItemClick(item)}
+                          className={cn(
+                            'w-full flex items-center gap-3 p-2 rounded-md text-left transition-colors',
+                            'hover:bg-muted',
+                            item.type === 'gdb' && 'bg-primary/5 hover:bg-primary/10',
+                            item.type === 'sde' && 'bg-accent/5 hover:bg-accent/10'
+                          )}
+                        >
+                          {getItemIcon(item.type)}
+                          <span className="flex-1 truncate text-sm">{item.name}</span>
+                          {item.type === 'folder' && (
+                            <ChevronRight className="w-4 h-4 text-muted-foreground" />
+                          )}
+                          {(item.type === 'gdb' || item.type === 'sde') && (
+                            <span className="text-xs text-muted-foreground uppercase">
+                              {item.type}
+                            </span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </ScrollArea>
+
+                {/* Actions */}
+                {type === 'folder' && currentPath && (
+                  <Button onClick={handleSelectCurrent} className="w-full">
+                    Select This Folder
+                  </Button>
+                )}
+              </div>
+            ) : null}
           </DialogContent>
         </Dialog>
       </div>
