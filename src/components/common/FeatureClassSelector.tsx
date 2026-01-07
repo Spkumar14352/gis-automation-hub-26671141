@@ -45,13 +45,17 @@ export function FeatureClassSelector({
     setError(null);
 
     try {
-      const response = await fetch(`${pythonBackendUrl}/list-feature-classes?path=${encodeURIComponent(gdbPath)}`, {
+      const response = await fetch(`${pythonBackendUrl}/list-feature-classes`, {
         method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ gdbPath }),
       });
 
       if (!response.ok) {
         const data = await response.json();
-        throw new Error(data.detail || 'Failed to list feature classes');
+        throw new Error(data.error || data.detail || 'Failed to list feature classes');
       }
 
       const data = await response.json();
