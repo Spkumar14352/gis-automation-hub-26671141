@@ -1,8 +1,10 @@
-import { Database, GitCompare, ArrowLeftRight, Map, Settings, ChevronLeft } from 'lucide-react';
+import { Database, GitCompare, ArrowLeftRight, Map, Settings, ChevronLeft, History, LogOut } from 'lucide-react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { useAuth } from '@/contexts/AuthContext';
+import { toast } from 'sonner';
 
 const navItems = [
   {
@@ -23,11 +25,23 @@ const navItems = [
     icon: GitCompare,
     path: '/comparison',
   },
+  {
+    title: 'Job History',
+    description: 'View past executions',
+    icon: History,
+    path: '/history',
+  },
 ];
 
 export function AppSidebar() {
   const [collapsed, setCollapsed] = useState(false);
   const location = useLocation();
+  const { user, signOut } = useAuth();
+
+  const handleSignOut = async () => {
+    await signOut();
+    toast.success('Signed out successfully');
+  };
 
   return (
     <aside
@@ -84,7 +98,7 @@ export function AppSidebar() {
       </nav>
 
       {/* Footer */}
-      <div className="p-3 border-t border-sidebar-border">
+      <div className="p-3 border-t border-sidebar-border space-y-1">
         <NavLink
           to="/settings"
           className={cn(
@@ -96,6 +110,26 @@ export function AppSidebar() {
           <Settings className="w-5 h-5 flex-shrink-0" />
           {!collapsed && <span className="text-sm">Settings</span>}
         </NavLink>
+
+        {user && (
+          <div className={cn('px-3 py-2', !collapsed && 'space-y-2')}>
+            {!collapsed && (
+              <p className="text-xs text-muted-foreground truncate">{user.email}</p>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleSignOut}
+              className={cn(
+                'w-full justify-start text-muted-foreground hover:text-foreground',
+                collapsed && 'px-0 justify-center'
+              )}
+            >
+              <LogOut className="w-4 h-4" />
+              {!collapsed && <span className="ml-2">Sign Out</span>}
+            </Button>
+          </div>
+        )}
       </div>
     </aside>
   );
