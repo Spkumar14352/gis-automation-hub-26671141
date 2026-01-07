@@ -97,10 +97,22 @@ async function initDatabase() {
 }
 
 function initSQLite() {
-  const sqlite3 = require('better-sqlite3');
+  let sqlite3;
+  try {
+    sqlite3 = require('better-sqlite3');
+  } catch (error) {
+    console.error('❌ SQLite initialization failed: missing dependency "better-sqlite3".');
+    console.error('💡 Fix: run "npm install" inside public/node-backend.');
+    console.error('💡 Alternative: set DB_TYPE=sqlserver to use SQL Server instead of SQLite.');
+    console.error('   Details:', error.message);
+    dbReady = false;
+    db = null;
+    return;
+  }
+
   const dbPath = process.env.DATABASE_PATH || path.join(__dirname, 'gis_hub.db');
   db = sqlite3(dbPath);
-  
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
@@ -109,7 +121,7 @@ function initSQLite() {
       full_name TEXT,
       created_at TEXT DEFAULT (datetime('now'))
     );
-    
+
     CREATE TABLE IF NOT EXISTS configurations (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
@@ -121,7 +133,7 @@ function initSQLite() {
       updated_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (user_id) REFERENCES users(id)
     );
-    
+
     CREATE TABLE IF NOT EXISTS job_history (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
@@ -136,7 +148,7 @@ function initSQLite() {
       FOREIGN KEY (user_id) REFERENCES users(id)
     );
   `);
-  
+
   console.log(`📦 SQLite database initialized at: ${dbPath}`);
   dbReady = true;
 }
@@ -225,24 +237,39 @@ function verifyToken(token) {
   }
 }
 
+// Database-required middleware
+function requireDatabase(req, res, next) {
+  if (!dbReady || !db) {
+    return res.status(503).json({
+      detail:
+        'Database is not ready. If you are using SQLite, run "npm install" in public/node-backend (to install better-sqlite3). If you are using SQL Server, set DB_TYPE=sqlserver and configure DB_* env vars.'
+    });
+  }
+  next();
+}
+
 // Auth middleware
 async function authMiddleware(req, res, next) {
+  if (!dbReady || !db) {
+    return res.status(503).json({ detail: 'Database is not ready' });
+  }
+
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ detail: 'Not authenticated' });
   }
-  
+
   const token = authHeader.substring(7);
   const decoded = verifyToken(token);
   if (!decoded) {
     return res.status(401).json({ detail: 'Invalid or expired token' });
   }
-  
+
   const user = await dbGet('SELECT id, email, full_name, created_at FROM users WHERE id = ?', [decoded.sub]);
   if (!user) {
     return res.status(401).json({ detail: 'User not found' });
   }
-  
+
   req.user = user;
   next();
 }
@@ -628,55 +655,59 @@ async function sendCallback(callbackUrl, jobId, status, logs, result) {
 }
 
 // ============= Auth Endpoints =============
-app.post('/auth/signup', async (req, res) => {
+app.post('/auth/signup', requireDatabase, async (req, res) => {
   const { email, password, full_name } = req.body;
-  
+
   if (!email || !password) {
     return res.status(400).json({ detail: 'Email and password are required' });
   }
-  
+
   try {
     const existing = await dbGet('SELECT id FROM users WHERE email = ?', [email]);
     if (existing) {
       return res.status(400).json({ detail: 'Email already registered' });
     }
-    
+
     const id = uuidv4();
     const passwordHash = hashPassword(password);
-    
-    await dbRun('INSERT INTO users (id, email, password_hash, full_name) VALUES (?, ?, ?, ?)',
-      [id, email, passwordHash, full_name || null]);
-    
+
+    await dbRun('INSERT INTO users (id, email, password_hash, full_name) VALUES (?, ?, ?, ?)', [
+      id,
+      email,
+      passwordHash,
+      full_name || null,
+    ]);
+
     const user = { id, email, full_name: full_name || null, created_at: new Date().toISOString() };
     const token = createToken(id);
-    
+
     res.json({ user, token });
   } catch (error) {
     res.status(500).json({ detail: error.message });
   }
 });
 
-app.post('/auth/signin', async (req, res) => {
+app.post('/auth/signin', requireDatabase, async (req, res) => {
   const { email, password } = req.body;
-  
+
   if (!email || !password) {
     return res.status(400).json({ detail: 'Email and password are required' });
   }
-  
+
   const user = await dbGet('SELECT * FROM users WHERE email = ?', [email]);
   if (!user || !verifyPassword(password, user.password_hash)) {
     return res.status(401).json({ detail: 'Invalid email or password' });
   }
-  
+
   const token = createToken(user.id);
-  
+
   res.json({
     user: { id: user.id, email: user.email, full_name: user.full_name, created_at: user.created_at },
-    token
+    token,
   });
 });
 
-app.get('/auth/me', authMiddleware, (req, res) => {
+app.get('/auth/me', requireDatabase, authMiddleware, (req, res) => {
   res.json({ user: req.user });
 });
 
@@ -685,18 +716,24 @@ app.post('/auth/signout', (req, res) => {
 });
 
 // ============= Configuration Endpoints =============
-app.get('/configurations', authMiddleware, async (req, res) => {
+app.get('/configurations', requireDatabase, authMiddleware, async (req, res) => {
   const configs = await dbQuery('SELECT * FROM configurations WHERE user_id = ?', [req.user.id]);
-  res.json(configs.map(c => ({ ...c, config: JSON.parse(c.config) })));
+  res.json(configs.map((c) => ({ ...c, config: JSON.parse(c.config) })));
 });
 
-app.post('/configurations', authMiddleware, async (req, res) => {
+app.post('/configurations', requireDatabase, authMiddleware, async (req, res) => {
   const { name, job_type, config, is_default } = req.body;
   const id = uuidv4();
-  
-  await dbRun('INSERT INTO configurations (id, user_id, name, job_type, config, is_default) VALUES (?, ?, ?, ?, ?, ?)',
-    [id, req.user.id, name, job_type, JSON.stringify(config), is_default ? 1 : 0]);
-  
+
+  await dbRun('INSERT INTO configurations (id, user_id, name, job_type, config, is_default) VALUES (?, ?, ?, ?, ?, ?)', [
+    id,
+    req.user.id,
+    name,
+    job_type,
+    JSON.stringify(config),
+    is_default ? 1 : 0,
+  ]);
+
   res.json({ id, name, job_type, config, is_default: !!is_default });
 });
 
