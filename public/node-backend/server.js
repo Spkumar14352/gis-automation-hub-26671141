@@ -89,19 +89,19 @@ async function initDatabase() {
     } catch (error) {
       console.error('❌ SQL Server connection failed:', error.message);
       console.log('💡 Falling back to SQLite...');
-      initSQLite();
+      await initSQLite();
     }
   } else {
-    initSQLite();
+    await initSQLite();
   }
 }
 
-function initSQLite() {
-  let sqlite3;
+async function initSQLite() {
+  let initSqlJs;
   try {
-    sqlite3 = require('better-sqlite3');
+    initSqlJs = require('sql.js');
   } catch (error) {
-    console.error('❌ SQLite initialization failed: missing dependency "better-sqlite3".');
+    console.error('❌ SQLite initialization failed: missing dependency "sql.js".');
     console.error('💡 Fix: run "npm install" inside public/node-backend.');
     console.error('💡 Alternative: set DB_TYPE=sqlserver to use SQL Server instead of SQLite.');
     console.error('   Details:', error.message);
@@ -110,50 +110,78 @@ function initSQLite() {
     return;
   }
 
-  const dbPath = process.env.DATABASE_PATH || path.join(__dirname, 'gis_hub.db');
-  db = sqlite3(dbPath);
+  try {
+    const dbPath = process.env.DATABASE_PATH || path.join(__dirname, 'gis_hub.db');
+    const SQL = await initSqlJs();
+    
+    // Load existing database or create new one
+    let data = null;
+    if (fs.existsSync(dbPath)) {
+      data = fs.readFileSync(dbPath);
+    }
+    db = new SQL.Database(data);
+    
+    // Store path for saving
+    db._dbPath = dbPath;
 
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY,
-      email TEXT UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
-      full_name TEXT,
-      created_at TEXT DEFAULT (datetime('now'))
-    );
+    db.run(`
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        email TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        full_name TEXT,
+        created_at TEXT DEFAULT (datetime('now'))
+      );
 
-    CREATE TABLE IF NOT EXISTS configurations (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      name TEXT NOT NULL,
-      job_type TEXT NOT NULL,
-      config TEXT NOT NULL,
-      is_default INTEGER DEFAULT 0,
-      created_at TEXT DEFAULT (datetime('now')),
-      updated_at TEXT DEFAULT (datetime('now')),
-      FOREIGN KEY (user_id) REFERENCES users(id)
-    );
+      CREATE TABLE IF NOT EXISTS configurations (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        job_type TEXT NOT NULL,
+        config TEXT NOT NULL,
+        is_default INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now')),
+        FOREIGN KEY (user_id) REFERENCES users(id)
+      );
 
-    CREATE TABLE IF NOT EXISTS job_history (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      job_type TEXT NOT NULL,
-      config TEXT NOT NULL,
-      status TEXT DEFAULT 'pending',
-      logs TEXT DEFAULT '[]',
-      result TEXT,
-      started_at TEXT,
-      completed_at TEXT,
-      created_at TEXT DEFAULT (datetime('now')),
-      FOREIGN KEY (user_id) REFERENCES users(id)
-    );
-  `);
+      CREATE TABLE IF NOT EXISTS job_history (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        job_type TEXT NOT NULL,
+        config TEXT NOT NULL,
+        status TEXT DEFAULT 'pending',
+        logs TEXT DEFAULT '[]',
+        result TEXT,
+        started_at TEXT,
+        completed_at TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        FOREIGN KEY (user_id) REFERENCES users(id)
+      );
+    `);
 
-  console.log(`📦 SQLite database initialized at: ${dbPath}`);
-  dbReady = true;
+    // Save database to file
+    saveDatabase();
+
+    console.log(`📦 SQLite database initialized at: ${dbPath}`);
+    dbReady = true;
+  } catch (error) {
+    console.error('❌ SQLite database error:', error.message);
+    dbReady = false;
+    db = null;
+  }
 }
 
-// Database helper functions for both SQLite and SQL Server
+// Helper to save SQLite database to file
+function saveDatabase() {
+  if (db && db._dbPath && DB_TYPE !== 'sqlserver') {
+    const data = db.export();
+    const buffer = Buffer.from(data);
+    fs.writeFileSync(db._dbPath, buffer);
+  }
+}
+
+// Database helper functions for both SQLite (sql.js) and SQL Server
 async function dbQuery(query, params = []) {
   if (DB_TYPE === 'sqlserver' && db && db.request) {
     const request = db.request();
@@ -167,7 +195,15 @@ async function dbQuery(query, params = []) {
     const result = await request.query(sqlQuery);
     return result.recordset;
   } else {
-    return db.prepare(query).all(...params);
+    // sql.js uses a different API
+    const stmt = db.prepare(query);
+    stmt.bind(params);
+    const results = [];
+    while (stmt.step()) {
+      results.push(stmt.getAsObject());
+    }
+    stmt.free();
+    return results;
   }
 }
 
@@ -187,7 +223,9 @@ async function dbRun(query, params = []) {
     sqlQuery = sqlQuery.replace(/\?/g, () => `@p${paramIndex++}`);
     await request.query(sqlQuery);
   } else {
-    db.prepare(query).run(...params);
+    // sql.js uses run() for inserts/updates
+    db.run(query, params);
+    saveDatabase(); // Persist changes to file
   }
 }
 
