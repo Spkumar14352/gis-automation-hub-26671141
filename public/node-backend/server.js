@@ -550,11 +550,12 @@ app.post('/list-feature-classes', (req, res) => {
   const pythonPath = runtimePythonPath || process.env.ARCPY_PYTHON_PATH || 'python';
   const scriptPath = path.join(__dirname, 'scripts', 'list_feature_classes.py');
 
-  // Check if Python is available
-  const checkPython = spawn(pythonPath, ['--version']);
-  
-  checkPython.on('error', (err) => {
-    // Python not available - return mock data for testing
+  // Flag to prevent sending multiple responses
+  let responseSent = false;
+
+  const sendMockData = (message) => {
+    if (responseSent) return;
+    responseSent = true;
     console.log('Python not available, returning mock data for testing');
     const gdbName = path.basename(gdbPath, '.gdb');
     return res.json({
@@ -570,24 +571,23 @@ app.post('/list-feature-classes', (req, res) => {
         `${gdbName}_Permits`
       ],
       arcpyAvailable: false,
-      message: 'Python/ArcPy not available - showing sample data for testing'
+      message: message || 'Python/ArcPy not available - showing sample data for testing'
     });
+  };
+
+  // Check if Python is available
+  const checkPython = spawn(pythonPath, ['--version']);
+  
+  checkPython.on('error', (err) => {
+    sendMockData('Python not found - showing sample data');
   });
 
   checkPython.on('close', (code) => {
+    if (responseSent) return;
+    
     if (code !== 0) {
-      // Python check failed - return mock data
-      const gdbName = path.basename(gdbPath, '.gdb');
-      return res.json({
-        feature_classes: [
-          { name: `${gdbName}_Parcels`, type: 'Polygon', feature_count: 15420 },
-          { name: `${gdbName}_Roads`, type: 'Polyline', feature_count: 8350 },
-          { name: `${gdbName}_Buildings`, type: 'Polygon', feature_count: 12800 }
-        ],
-        tables: [`${gdbName}_Owners`],
-        arcpyAvailable: false,
-        message: 'Python not configured - showing sample data'
-      });
+      sendMockData('Python not configured - showing sample data');
+      return;
     }
 
     // Python is available, run the script
@@ -605,20 +605,13 @@ app.post('/list-feature-classes', (req, res) => {
     });
 
     pythonProcess.on('error', (err) => {
-      // Script execution error - return mock data
-      const gdbName = path.basename(gdbPath, '.gdb');
-      return res.json({
-        feature_classes: [
-          { name: `${gdbName}_Parcels`, type: 'Polygon', feature_count: 15420 },
-          { name: `${gdbName}_Roads`, type: 'Polyline', feature_count: 8350 }
-        ],
-        tables: [],
-        arcpyAvailable: false,
-        message: 'Script error - showing sample data'
-      });
+      sendMockData('Script error - showing sample data');
     });
 
     pythonProcess.on('close', (code) => {
+      if (responseSent) return;
+      responseSent = true;
+      
       if (code !== 0) {
         // Python script failed - likely ArcPy not available
         const gdbName = path.basename(gdbPath, '.gdb');
