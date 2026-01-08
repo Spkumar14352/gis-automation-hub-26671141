@@ -4,6 +4,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "./contexts/AuthContext";
+import { BackendProvider } from "./contexts/BackendContext";
 import { ProtectedRoute } from "./components/auth/ProtectedRoute";
 import { MainLayout } from "./components/layout/MainLayout";
 import Index from "./pages/Index";
@@ -33,26 +34,28 @@ function ThemeInitializer() {
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <AuthProvider>
-      <TooltipProvider>
-        <ThemeInitializer />
-        <Toaster />
-        <Sonner />
-        <BrowserRouter>
-          <Routes>
-            <Route path="/" element={<Index />} />
-            <Route element={<MainLayout />}>
-              <Route path="/dashboard" element={<Dashboard />} />
-              <Route path="/gdb-extraction" element={<GDBExtraction />} />
-              <Route path="/sde-conversion" element={<SDEConversion />} />
-              <Route path="/comparison" element={<Comparison />} />
-              <Route path="/history" element={<JobHistory />} />
-              <Route path="/settings" element={<Settings />} />
-              <Route path="/profile" element={<Profile />} />
-            </Route>
-            <Route path="*" element={<NotFound />} />
-          </Routes>
-        </BrowserRouter>
-      </TooltipProvider>
+      <BackendProvider>
+        <TooltipProvider>
+          <ThemeInitializer />
+          <Toaster />
+          <Sonner />
+          <BrowserRouter>
+            <Routes>
+              <Route path="/" element={<Index />} />
+              <Route element={<MainLayout />}>
+                <Route path="/dashboard" element={<Dashboard />} />
+                <Route path="/gdb-extraction" element={<GDBExtraction />} />
+                <Route path="/sde-conversion" element={<SDEConversion />} />
+                <Route path="/comparison" element={<Comparison />} />
+                <Route path="/history" element={<JobHistory />} />
+                <Route path="/settings" element={<Settings />} />
+                <Route path="/profile" element={<Profile />} />
+              </Route>
+              <Route path="*" element={<NotFound />} />
+            </Routes>
+          </BrowserRouter>
+        </TooltipProvider>
+      </BackendProvider>
     </AuthProvider>
   </QueryClientProvider>
 );
