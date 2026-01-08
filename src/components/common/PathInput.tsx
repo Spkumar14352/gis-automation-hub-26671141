@@ -64,6 +64,9 @@ export function PathInput({
   const [currentPath, setCurrentPath] = useState('');
   const [pythonBackendUrl] = useLocalStorage('python-backend-url', '');
   const [browseMode, setBrowseMode] = useState<'local' | 'server'>('local');
+  const [pathPromptOpen, setPathPromptOpen] = useState(false);
+  const [pendingItemName, setPendingItemName] = useState('');
+  const [fullPathInput, setFullPathInput] = useState('');
 
   // Check if File System Access API is supported
   const isFileSystemSupported = 'showDirectoryPicker' in window;
@@ -178,17 +181,23 @@ export function PathInput({
     if (item.type === 'folder' && browseMode === 'server') {
       browseServerFilesystem(item.path);
     } else if (item.type === 'gdb' || item.type === 'sde') {
-      // For local mode, we need user to provide full path
+      // For local mode, we need user to provide full path via modal
       if (browseMode === 'local') {
-        const fullPath = prompt(`Enter the full path to ${item.name}:`, `C:\\GIS\\Data\\${item.name}`);
-        if (fullPath) {
-          onChange(fullPath);
-          setOpen(false);
-        }
+        setPendingItemName(item.name);
+        setFullPathInput(`C:\\GIS\\Data\\${item.name}`);
+        setPathPromptOpen(true);
       } else {
         onChange(item.path);
         setOpen(false);
       }
+    }
+  };
+
+  const handlePathConfirm = () => {
+    if (fullPathInput.trim()) {
+      onChange(fullPathInput.trim());
+      setPathPromptOpen(false);
+      setOpen(false);
     }
   };
 
@@ -455,6 +464,46 @@ export function PathInput({
                 )}
               </TabsContent>
             </Tabs>
+          </DialogContent>
+        </Dialog>
+
+        {/* Path Input Modal for Local GDB Selection */}
+        <Dialog open={pathPromptOpen} onOpenChange={setPathPromptOpen}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Enter Full Path</DialogTitle>
+              <DialogDescription>
+                Enter the complete path to <span className="font-mono font-medium">{pendingItemName}</span>
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-2">
+              <div className="space-y-2">
+                <Label htmlFor="full-path">Full Path</Label>
+                <Input
+                  id="full-path"
+                  value={fullPathInput}
+                  onChange={(e) => setFullPathInput(e.target.value)}
+                  placeholder="C:\GIS\Data\YourDatabase.gdb"
+                  className="font-mono text-sm"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      handlePathConfirm();
+                    }
+                  }}
+                />
+                <p className="text-xs text-muted-foreground">
+                  The browser cannot access the full path for security reasons. Please enter the complete path.
+                </p>
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setPathPromptOpen(false)}>
+                  Cancel
+                </Button>
+                <Button onClick={handlePathConfirm} disabled={!fullPathInput.trim()}>
+                  Confirm
+                </Button>
+              </div>
+            </div>
           </DialogContent>
         </Dialog>
       </div>
