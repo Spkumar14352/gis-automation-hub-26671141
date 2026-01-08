@@ -1,10 +1,12 @@
-import { Database, GitCompare, ArrowLeftRight, Map, Settings, ChevronLeft, History, LogOut, LayoutDashboard, User } from 'lucide-react';
+import { Database, GitCompare, ArrowLeftRight, Map, Settings, ChevronLeft, History, LogOut, LayoutDashboard, User, Wifi, WifiOff, Loader2 } from 'lucide-react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/contexts/AuthContext';
+import { useBackend } from '@/contexts/BackendContext';
 import { toast } from 'sonner';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 
 const navItems = [
   {
@@ -49,6 +51,7 @@ export function AppSidebar() {
   const [collapsed, setCollapsed] = useState(false);
   const location = useLocation();
   const { user, signOut } = useAuth();
+  const { status, checkConnection } = useBackend();
 
   const handleSignOut = async () => {
     await signOut();
@@ -81,6 +84,41 @@ export function AppSidebar() {
         >
           <ChevronLeft className={cn('w-4 h-4 transition-transform', collapsed && 'rotate-180')} />
         </Button>
+      </div>
+
+      {/* Backend Status */}
+      <div className={cn('px-3 py-2 border-b border-sidebar-border', collapsed && 'px-2')}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              onClick={() => checkConnection()}
+              className={cn(
+                'flex items-center gap-2 w-full px-2 py-1.5 rounded-md text-xs transition-colors',
+                status === 'connected' && 'bg-green-500/10 text-green-600 dark:text-green-400',
+                status === 'disconnected' && 'bg-red-500/10 text-red-600 dark:text-red-400',
+                status === 'checking' && 'bg-yellow-500/10 text-yellow-600 dark:text-yellow-400'
+              )}
+            >
+              {status === 'checking' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              {status === 'connected' && <Wifi className="w-3.5 h-3.5" />}
+              {status === 'disconnected' && <WifiOff className="w-3.5 h-3.5" />}
+              {!collapsed && (
+                <span className="truncate">
+                  {status === 'checking' && 'Checking...'}
+                  {status === 'connected' && 'Backend Connected'}
+                  {status === 'disconnected' && 'Backend Offline'}
+                </span>
+              )}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="right">
+            <p>
+              {status === 'connected' && 'Backend is connected. Click to refresh.'}
+              {status === 'disconnected' && 'Backend is offline. Click to retry.'}
+              {status === 'checking' && 'Checking connection...'}
+            </p>
+          </TooltipContent>
+        </Tooltip>
       </div>
 
       {/* Navigation */}
